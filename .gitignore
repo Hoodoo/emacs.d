@@ -1,0 +1,13 @@
+straight/
+eln-cache/
+backups/
+auto-save-list/
+undo-fu-session/
+*~
+.#*
+vulpea.db*
+.org-id-locations
+agent/history
+.codex/
+.agents/
+.agent-shell/transcripts/
