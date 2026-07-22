@@ -158,10 +158,18 @@ Leaves existing Codex shells alone."
    #'agent-shell-openai-start-codex))
 
 (defun hoodoo/session--create-and-tag (create-fn)
-  "Call CREATE-FN, tag the buffer it leaves current to the current tab's
-session, display it via `display-buffer', and return it."
+  "Call CREATE-FN, tag the buffer it displays in the selected window to
+the current tab's session, display it via `display-buffer', and return it.
+
+Uses the selected window's buffer rather than `current-buffer' to find
+what CREATE-FN created: some commands (e.g. `eat', via `eat--1') do
+their setup inside `with-current-buffer', which reverts `current-buffer'
+when it returns even though the selected window really does show the
+new buffer."
   (let* ((session (hoodoo/session--require-current-session-buffer))
-         (buf (save-window-excursion (funcall create-fn) (current-buffer))))
+         (buf (save-window-excursion
+                (funcall create-fn)
+                (window-buffer (selected-window)))))
     (hoodoo/session--tag-buffer buf session)
     (display-buffer buf)
     buf))

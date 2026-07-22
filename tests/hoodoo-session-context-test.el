@@ -285,6 +285,32 @@
       (mapc #'kill-buffer (list session created))
       (delete-other-windows))))
 
+(ert-deftest hoodoo/session-test-create-and-tag-eat-like-buffer ()
+  "Regression test: `eat' (eat--1) wraps its buffer setup in
+`with-current-buffer', which reverts `current-buffer' when it returns
+even though the selected window really does show the new buffer.
+`hoodoo/session--create-and-tag' must find the created buffer via
+`window-buffer', not `current-buffer', or eat buffers never get tagged."
+  (let ((session (generate-new-buffer "agent"))
+        (created (generate-new-buffer "fake-eat")))
+    (unwind-protect
+        (progn
+          (delete-other-windows)
+          (with-current-buffer session (setq major-mode 'agent-shell-mode))
+          (switch-to-buffer session)
+          (let ((result (hoodoo/session--create-and-tag
+                         (lambda ()
+                           ;; Simulate `eat--1': switch the selected
+                           ;; window's buffer from inside
+                           ;; `with-current-buffer', which then reverts
+                           ;; `current-buffer' back to SESSION on exit.
+                           (with-current-buffer created
+                             (switch-to-buffer created))))))
+            (should (eq result created)))
+          (should (eq (buffer-local-value 'hoodoo/session-buffer created) session)))
+      (mapc #'kill-buffer (list session created))
+      (delete-other-windows))))
+
 (ert-deftest hoodoo/session-test-create-and-tag-requires-session ()
   (let ((scratch (get-buffer-create "*scratch*")))
     (unwind-protect
