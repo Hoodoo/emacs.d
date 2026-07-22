@@ -566,7 +566,8 @@ git commit -m "Add tab creation and agent-shell-mode-hook wiring"
 **Interfaces:**
 - Consumes: `hoodoo/session--start-in-tab`, `hoodoo/session--default-label` (Tasks 1, 5).
 - Produces:
-  - `hoodoo/claude-start-in (dir label)` — interactive command. Prompts for DIR then LABEL (defaulting to `hoodoo/session--default-label` of DIR); creates a tab named LABEL and starts a Claude Code session in DIR inside it.
+  - `hoodoo/session--start-agent-in-tab (dir label require-features start-fn)` — shared helper. `require`s each symbol in REQUIRE-FEATURES, then creates a tab named LABEL and calls the 0-arg START-FN inside it with `agent-shell-cwd-function` dynamically bound to return DIR. Both commands below delegate to this instead of duplicating its body — the *commands* stay separate (so `M-x hoodoo/claude-start-in` / `hoodoo/codex-start-in` are still the two things you invoke), only the shared plumbing is factored out.
+  - `hoodoo/claude-start-in (dir label)` — interactive command. Prompts for DIR then LABEL (defaulting to `hoodoo/session--default-label` of DIR); delegates to `hoodoo/session--start-agent-in-tab` with the Claude-specific `require`s and start function.
   - `hoodoo/codex-start-in (dir label)` — same, for Codex.
 
 - [ ] **Step 1: Write the failing tests**
@@ -574,43 +575,64 @@ git commit -m "Add tab creation and agent-shell-mode-hook wiring"
 Append to `tests/hoodoo-session-context-test.el`:
 
 ```elisp
-(ert-deftest hoodoo/session-test-claude-start-in-uses-tab-and-cwd ()
-  (let ((tab-label nil) (started-in-dir nil) (required-anthropic nil))
-    (cl-letf (((symbol-function 'hoodoo/session--make-tab)
-               (lambda (label) (setq tab-label label)))
+(ert-deftest hoodoo/session-test-start-agent-in-tab ()
+  (let ((tab-label nil) (required nil) (started-in-dir nil))
+    (cl-letf (((symbol-function 'hoodoo/session--start-in-tab)
+               (lambda (label start-fn)
+                 (setq tab-label label)
+                 (funcall start-fn)))
               ((symbol-function 'require)
-               (lambda (feature &rest _)
-                 (when (memq feature '(agent-shell-anthropic agent-shell-project))
-                   (setq required-anthropic t))))
-              ((symbol-function 'agent-shell-anthropic-start-claude-code)
-               (lambda () (setq started-in-dir (funcall agent-shell-cwd-function)))))
-      (hoodoo/claude-start-in "/tmp/proj" "incident-42")
-      (should (equal tab-label "incident-42"))
-      (should (equal started-in-dir "/tmp/proj"))
-      (should required-anthropic))))
+               (lambda (feature &rest _) (push feature required) feature)))
+      (hoodoo/session--start-agent-in-tab
+       "/tmp/proj" "incident-42" '(fake-feature-a fake-feature-b)
+       (lambda () (setq started-in-dir (funcall agent-shell-cwd-function)))))
+    (should (equal tab-label "incident-42"))
+    (should (equal (reverse required) '(fake-feature-a fake-feature-b)))
+    (should (equal started-in-dir "/tmp/proj"))))
 
-(ert-deftest hoodoo/session-test-codex-start-in-uses-tab-and-cwd ()
-  (let ((tab-label nil) (started-in-dir nil))
-    (cl-letf (((symbol-function 'hoodoo/session--make-tab)
-               (lambda (label) (setq tab-label label)))
-              ((symbol-function 'require) (lambda (&rest _) t))
-              ((symbol-function 'agent-shell-openai-start-codex)
-               (lambda () (setq started-in-dir (funcall agent-shell-cwd-function)))))
-      (hoodoo/codex-start-in "/tmp/proj" "incident-42")
-      (should (equal tab-label "incident-42"))
-      (should (equal started-in-dir "/tmp/proj")))))
+(ert-deftest hoodoo/session-test-claude-start-in-delegates ()
+  (let (call-args)
+    (cl-letf (((symbol-function 'hoodoo/session--start-agent-in-tab)
+               (lambda (&rest args) (setq call-args args))))
+      (hoodoo/claude-start-in "/tmp/proj" "incident-42"))
+    (should (equal (nth 0 call-args) "/tmp/proj"))
+    (should (equal (nth 1 call-args) "incident-42"))
+    (should (equal (nth 2 call-args) '(agent-shell-anthropic agent-shell-project)))
+    (should (eq (nth 3 call-args) #'agent-shell-anthropic-start-claude-code))))
+
+(ert-deftest hoodoo/session-test-codex-start-in-delegates ()
+  (let (call-args)
+    (cl-letf (((symbol-function 'hoodoo/session--start-agent-in-tab)
+               (lambda (&rest args) (setq call-args args))))
+      (hoodoo/codex-start-in "/tmp/proj" "incident-42"))
+    (should (equal (nth 0 call-args) "/tmp/proj"))
+    (should (equal (nth 1 call-args) "incident-42"))
+    (should (equal (nth 2 call-args) '(agent-shell-openai agent-shell-project)))
+    (should (eq (nth 3 call-args) #'agent-shell-openai-start-codex))))
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: FAIL — `hoodoo/claude-start-in` is void.
+Expected: FAIL — `hoodoo/session--start-agent-in-tab` is void.
 
 - [ ] **Step 3: Write minimal implementation**
 
 Add to `hoodoo-session-context.el`, after `hoodoo/session--start-in-tab` (before the `add-hook` wiring line, so all `defun`s stay grouped):
 
 ```elisp
+(defun hoodoo/session--start-agent-in-tab (dir label require-features start-fn)
+  "Require REQUIRE-FEATURES, then start an agent shell rooted at DIR in a
+new tab named LABEL.  START-FN is called with no arguments, inside a
+`let' that binds `agent-shell-cwd-function' to return DIR."
+  (dolist (feature require-features)
+    (require feature))
+  (hoodoo/session--start-in-tab
+   label
+   (lambda ()
+     (let ((agent-shell-cwd-function (lambda () dir)))
+       (funcall start-fn)))))
+
 (defun hoodoo/claude-start-in (dir label)
   "Start a fresh Claude Code shell rooted at DIR, in its own tab named LABEL.
 Leaves existing Claude shells alone."
@@ -620,13 +642,10 @@ Leaves existing Claude shells alone."
                (or (when-let ((proj (project-current))) (project-root proj))
                    default-directory))))
      (list dir (read-string "Session label: " (hoodoo/session--default-label dir)))))
-  (require 'agent-shell-anthropic)
-  (require 'agent-shell-project)
-  (hoodoo/session--start-in-tab
-   label
-   (lambda ()
-     (let ((agent-shell-cwd-function (lambda () dir)))
-       (agent-shell-anthropic-start-claude-code)))))
+  (hoodoo/session--start-agent-in-tab
+   dir label
+   '(agent-shell-anthropic agent-shell-project)
+   #'agent-shell-anthropic-start-claude-code))
 
 (defun hoodoo/codex-start-in (dir label)
   "Start a fresh Codex shell rooted at DIR, in its own tab named LABEL.
@@ -637,19 +656,16 @@ Leaves existing Codex shells alone."
                (or (when-let ((proj (project-current))) (project-root proj))
                    default-directory))))
      (list dir (read-string "Session label: " (hoodoo/session--default-label dir)))))
-  (require 'agent-shell-openai)
-  (require 'agent-shell-project)
-  (hoodoo/session--start-in-tab
-   label
-   (lambda ()
-     (let ((agent-shell-cwd-function (lambda () dir)))
-       (agent-shell-openai-start-codex)))))
+  (hoodoo/session--start-agent-in-tab
+   dir label
+   '(agent-shell-openai agent-shell-project)
+   #'agent-shell-openai-start-codex))
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 15 tests, 15 results as expected`
+Expected: PASS — `Ran 16 tests, 16 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -747,7 +763,7 @@ session, display it via `display-buffer', and return it."
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 17 tests, 17 results as expected`
+Expected: PASS — `Ran 18 tests, 18 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -841,7 +857,7 @@ Add to `hoodoo-session-context.el`, after `hoodoo/session-dired`:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 19 tests, 19 results as expected`
+Expected: PASS — `Ran 20 tests, 20 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -905,7 +921,7 @@ Expected: `reached EOF cleanly` (same check used when this repo's `auto-side-win
 - [ ] **Step 3: Verify the full library still loads and all tests still pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 19 tests, 19 results as expected` (no regressions from the init.el rewiring, since `hoodoo-session-context.el` itself didn't change in this task).
+Expected: PASS — `Ran 20 tests, 20 results as expected` (no regressions from the init.el rewiring, since `hoodoo-session-context.el` itself didn't change in this task).
 
 - [ ] **Step 4: Commit**
 
