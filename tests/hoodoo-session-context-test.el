@@ -181,5 +181,55 @@
           (should tab-closed))
       (kill-buffer session))))
 
+(ert-deftest hoodoo/session-test-make-tab ()
+  (let ((created nil) (renamed nil))
+    (cl-letf (((symbol-function 'tab-bar-new-tab) (lambda () (setq created t)))
+              ((symbol-function 'tab-bar-rename-tab) (lambda (name) (setq renamed name))))
+      (hoodoo/session--make-tab "incident-42")
+      (should created)
+      (should (equal renamed "incident-42")))))
+
+(ert-deftest hoodoo/session-test-mode-hook-fn-tags-when-pending ()
+  (let ((buf (generate-new-buffer "agent"))
+        (hoodoo/session--pending-label "incident-42")
+        (hook-installed nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq major-mode 'agent-shell-mode)
+          ;; Capture the real `add-hook' before shadowing it — the mock
+          ;; must call through to the ORIGINAL, not to itself via
+          ;; `#'add-hook' (which would now resolve to the mock and
+          ;; recurse forever).
+          (let ((orig-add-hook (symbol-function 'add-hook)))
+            (cl-letf (((symbol-function 'add-hook)
+                       (lambda (hook fn &rest args)
+                         (when (eq hook 'kill-buffer-hook) (setq hook-installed fn))
+                         (apply orig-add-hook hook fn args))))
+              (hoodoo/session-mode-hook-fn)))
+          (should (equal hoodoo/session-label "incident-42"))
+          (should (eq hook-installed #'hoodoo/session--on-session-kill)))
+      (kill-buffer buf))))
+
+(ert-deftest hoodoo/session-test-mode-hook-fn-noop-without-pending ()
+  (let ((buf (generate-new-buffer "agent"))
+        (hoodoo/session--pending-label nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (hoodoo/session-mode-hook-fn)
+          (should (null hoodoo/session-label)))
+      (kill-buffer buf))))
+
+(ert-deftest hoodoo/session-test-start-in-tab-binds-label-and-makes-tab ()
+  (let ((made-tab nil) (seen-label nil))
+    (cl-letf (((symbol-function 'hoodoo/session--make-tab)
+               (lambda (label) (setq made-tab label))))
+      (hoodoo/session--start-in-tab
+       "incident-42"
+       (lambda () (setq seen-label hoodoo/session--pending-label))))
+    (should (equal made-tab "incident-42"))
+    (should (equal seen-label "incident-42"))
+    ;; Binding must not leak after the call.
+    (should (null hoodoo/session--pending-label))))
+
 (provide 'hoodoo-session-context-test)
 ;;; hoodoo-session-context-test.el ends here
