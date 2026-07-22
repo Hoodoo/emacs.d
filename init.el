@@ -181,38 +181,18 @@
    ("C-c a d" . hoodoo/claude-start-in)
    ("C-c a l" . agent-shell)
    ("C-c a r" . agent-shell-resume-session)
-   ("C-c a f" . agent-shell-fork))
-  :preface
-  ;; I currently think about Claude and Codes sessions as of
-  ;; something I start within a given directory (rather than
-  ;; in a context of any given file or buffer or line; support
-  ;; this through helper functions
-  (defun hoodoo/claude-start-in (dir)
-    "Start a fresh Claude Code shell rooted at DIR.
-  Leaves existing Claude shells alone.  Defaults to the current
-  project's root if there is one, else `default-directory'."
-    (interactive
-     (list (read-directory-name
-            "Start Claude in: "
-            (or (when-let ((proj (project-current))) (project-root proj))
-                default-directory))))
-    (require 'agent-shell-anthropic)
-    (require 'agent-shell-project)
-    (let ((agent-shell-cwd-function (lambda () dir)))
-      (agent-shell-anthropic-start-claude-code)))
-  (defun hoodoo/codex-start-in (dir)
-    "Start a fresh Codex shell rooted at DIR.
-  Leaves existing Codex shells alone.  Defaults to the current
-  project's root if there is one, else `default-directory'."
-    (interactive
-     (list (read-directory-name
-            "Start Codex in: "
-            (or (when-let ((proj (project-current))) (project-root proj))
-                default-directory))))
-    (require 'agent-shell-openai)
-    (require 'agent-shell-project)
-    (let ((agent-shell-cwd-function (lambda () dir)))
-      (agent-shell-openai-start-codex))))
+   ("C-c a f" . agent-shell-fork)
+   ("C-c a e" . hoodoo/session-eat)
+   ("C-c a m" . hoodoo/session-magit-status)
+   ("C-c a j" . hoodoo/session-dired)
+   ("C-c a a" . hoodoo/session-attach-buffer))
+  :config
+  ;; Ties eat/magit/dired buffers to the agent-shell session (buffer)
+  ;; they support, and gives each session its own tab-bar tab.
+  ;; See hoodoo-session-context.el and
+  ;; docs/superpowers/specs/2026-07-21-agent-shell-session-context-design.md
+  (require 'hoodoo-session-context
+           (expand-file-name "hoodoo-session-context.el" user-emacs-directory)))
 
 ;; Store the transcripts centrally
 (use-package agent-shell-org-transcript

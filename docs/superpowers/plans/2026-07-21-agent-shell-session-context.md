@@ -205,7 +205,7 @@ git commit -m "Add buffer tagging and attached-buffer lookup"
 **Interfaces:**
 - Consumes: nothing new.
 - Produces:
-  - `hoodoo/session--current-session-buffer (&optional frame)` → the sole buffer with `major-mode` `agent-shell-mode` displayed in a window of FRAME (default selected frame), or nil if there isn't exactly one.
+  - `hoodoo/session--current-session-buffer (&optional frame)` → the sole buffer with `major-mode` `agent-shell-mode` displayed in a window of FRAME (default selected frame), or nil if there isn't exactly one. Dedupes by buffer identity (`seq-uniq ... #'eq`) before counting, so one buffer shown in multiple windows (e.g. after `C-x 2`) still counts as exactly one, not ambiguous.
   - `hoodoo/session--require-current-session-buffer ()` → same, but signals `user-error` instead of returning nil.
 
 - [ ] **Step 1: Write the failing tests**
@@ -251,6 +251,22 @@ Append to `tests/hoodoo-session-context-test.el`:
           (should (null (hoodoo/session--current-session-buffer))))
       (mapc #'kill-buffer (list agent-buf-1 agent-buf-2))
       (delete-other-windows))))
+
+(ert-deftest hoodoo/session-test-current-session-buffer-same-buffer-two-windows ()
+  (let ((agent-buf (generate-new-buffer "agent")))
+    (unwind-protect
+        (progn
+          (delete-other-windows)
+          (with-current-buffer agent-buf (setq major-mode 'agent-shell-mode))
+          ;; The same buffer displayed in two windows (e.g. after `C-x 2')
+          ;; is still exactly one session buffer, not an ambiguous pair —
+          ;; candidates must be deduped by buffer identity, not counted
+          ;; per window.
+          (switch-to-buffer agent-buf)
+          (set-window-buffer (split-window) agent-buf)
+          (should (eq (hoodoo/session--current-session-buffer) agent-buf)))
+      (kill-buffer agent-buf)
+      (delete-other-windows))))
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -267,9 +283,11 @@ Add to `hoodoo-session-context.el`, after `hoodoo/session--attached-buffers`:
   "Return the agent-shell buffer displayed in a window of FRAME, or nil
 unless there is exactly one."
   (let ((candidates
-         (seq-filter (lambda (buf)
-                       (eq (buffer-local-value 'major-mode buf) 'agent-shell-mode))
-                     (mapcar #'window-buffer (window-list frame 'no-mini)))))
+         (seq-uniq
+          (seq-filter (lambda (buf)
+                        (eq (buffer-local-value 'major-mode buf) 'agent-shell-mode))
+                      (mapcar #'window-buffer (window-list frame 'no-mini)))
+          #'eq)))
     (when (= (length candidates) 1)
       (car candidates))))
 
@@ -283,7 +301,7 @@ instead of returning nil."
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 5 tests, 5 results as expected`
+Expected: PASS — `Ran 6 tests, 6 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -334,12 +352,33 @@ Append to `tests/hoodoo-session-context-test.el`:
       ;; Should not signal, since there's only one tab.
       (hoodoo/session--close-current-tab-safely))))
 
+(ert-deftest hoodoo/session-test-close-current-tab-safely-multiple-tabs-closes ()
+  (let ((tab-bar-mode t)
+        (closed nil))
+    (cl-letf (((symbol-function 'tab-bar-tabs)
+               (lambda () (list "tab-1" "tab-2")))
+              ((symbol-function 'tab-bar-close-tab)
+               (lambda (&rest _) (setq closed t))))
+      (hoodoo/session--close-current-tab-safely)
+      (should closed))))
+
+(ert-deftest hoodoo/session-test-close-current-tab-safely-tab-bar-off-noop ()
+  (let ((tab-bar-mode nil))
+    (cl-letf (((symbol-function 'tab-bar-tabs)
+               (lambda (&rest _) (error "should not be called")))
+              ((symbol-function 'tab-bar-close-tab)
+               (lambda (&rest _) (error "should not be called"))))
+      ;; Should not signal, and should short-circuit before ever
+      ;; consulting `tab-bar-tabs', since `tab-bar-mode' is off.
+      (hoodoo/session--close-current-tab-safely))))
+
 (ert-deftest hoodoo/session-test-on-session-kill-prompts-and-kills-defaults ()
   (let ((session (generate-new-buffer "session"))
         (eat-buf (generate-new-buffer "eat"))
         (dired-buf (generate-new-buffer "dired"))
         (tab-closed nil)
-        (prompt-arg nil))
+        (prompt-arg nil)
+        (captured-def nil))
     (unwind-protect
         (progn
           (with-current-buffer eat-buf (setq major-mode 'eat-mode))
@@ -347,14 +386,24 @@ Append to `tests/hoodoo-session-context-test.el`:
           (hoodoo/session--tag-buffer eat-buf session)
           (hoodoo/session--tag-buffer dired-buf session)
           (cl-letf (((symbol-function 'completing-read-multiple)
-                     (lambda (prompt _collection &rest _)
+                     (lambda (prompt collection &optional predicate
+                                     require-match initial-input hist def
+                                     &rest _)
+                       (ignore collection predicate require-match
+                               initial-input hist)
                        (setq prompt-arg prompt)
+                       (setq captured-def def)
                        (list (buffer-name eat-buf))))
                     ((symbol-function 'hoodoo/session--close-current-tab-safely)
                      (lambda () (setq tab-closed t))))
             (with-current-buffer session
               (hoodoo/session--on-session-kill)))
           (should (string-match-p "eat" prompt-arg))
+          ;; The DEF argument (7th positional) passed to
+          ;; `completing-read-multiple' should pre-select only the
+          ;; default-checked buffers: "eat" present, "dired" absent.
+          (should (string-match-p "eat" captured-def))
+          (should-not (string-match-p "dired" captured-def))
           (should-not (buffer-live-p eat-buf))
           (should (buffer-live-p dired-buf))
           (should tab-closed))
@@ -417,7 +466,7 @@ kill attached context buffers, then closes the session's tab."
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 9 tests, 9 results as expected`
+Expected: PASS — `Ran 12 tests, 12 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -546,7 +595,7 @@ Note: `agent-shell-mode-hook` here is the forward declaration from Task 1 (or th
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 13 tests, 13 results as expected`
+Expected: PASS — `Ran 16 tests, 16 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -566,7 +615,8 @@ git commit -m "Add tab creation and agent-shell-mode-hook wiring"
 **Interfaces:**
 - Consumes: `hoodoo/session--start-in-tab`, `hoodoo/session--default-label` (Tasks 1, 5).
 - Produces:
-  - `hoodoo/claude-start-in (dir label)` — interactive command. Prompts for DIR then LABEL (defaulting to `hoodoo/session--default-label` of DIR); creates a tab named LABEL and starts a Claude Code session in DIR inside it.
+  - `hoodoo/session--start-agent-in-tab (dir label require-features start-fn)` — shared helper. `require`s each symbol in REQUIRE-FEATURES, then creates a tab named LABEL and calls the 0-arg START-FN inside it with `agent-shell-cwd-function` dynamically bound to return DIR. Both commands below delegate to this instead of duplicating its body — the *commands* stay separate (so `M-x hoodoo/claude-start-in` / `hoodoo/codex-start-in` are still the two things you invoke), only the shared plumbing is factored out.
+  - `hoodoo/claude-start-in (dir label)` — interactive command. Prompts for DIR then LABEL (defaulting to `hoodoo/session--default-label` of DIR); delegates to `hoodoo/session--start-agent-in-tab` with the Claude-specific `require`s and start function.
   - `hoodoo/codex-start-in (dir label)` — same, for Codex.
 
 - [ ] **Step 1: Write the failing tests**
@@ -574,43 +624,64 @@ git commit -m "Add tab creation and agent-shell-mode-hook wiring"
 Append to `tests/hoodoo-session-context-test.el`:
 
 ```elisp
-(ert-deftest hoodoo/session-test-claude-start-in-uses-tab-and-cwd ()
-  (let ((tab-label nil) (started-in-dir nil) (required-anthropic nil))
-    (cl-letf (((symbol-function 'hoodoo/session--make-tab)
-               (lambda (label) (setq tab-label label)))
+(ert-deftest hoodoo/session-test-start-agent-in-tab ()
+  (let ((tab-label nil) (required nil) (started-in-dir nil))
+    (cl-letf (((symbol-function 'hoodoo/session--start-in-tab)
+               (lambda (label start-fn)
+                 (setq tab-label label)
+                 (funcall start-fn)))
               ((symbol-function 'require)
-               (lambda (feature &rest _)
-                 (when (memq feature '(agent-shell-anthropic agent-shell-project))
-                   (setq required-anthropic t))))
-              ((symbol-function 'agent-shell-anthropic-start-claude-code)
-               (lambda () (setq started-in-dir (funcall agent-shell-cwd-function)))))
-      (hoodoo/claude-start-in "/tmp/proj" "incident-42")
-      (should (equal tab-label "incident-42"))
-      (should (equal started-in-dir "/tmp/proj"))
-      (should required-anthropic))))
+               (lambda (feature &rest _) (push feature required) feature)))
+      (hoodoo/session--start-agent-in-tab
+       "/tmp/proj" "incident-42" '(fake-feature-a fake-feature-b)
+       (lambda () (setq started-in-dir (funcall agent-shell-cwd-function)))))
+    (should (equal tab-label "incident-42"))
+    (should (equal (reverse required) '(fake-feature-a fake-feature-b)))
+    (should (equal started-in-dir "/tmp/proj"))))
 
-(ert-deftest hoodoo/session-test-codex-start-in-uses-tab-and-cwd ()
-  (let ((tab-label nil) (started-in-dir nil))
-    (cl-letf (((symbol-function 'hoodoo/session--make-tab)
-               (lambda (label) (setq tab-label label)))
-              ((symbol-function 'require) (lambda (&rest _) t))
-              ((symbol-function 'agent-shell-openai-start-codex)
-               (lambda () (setq started-in-dir (funcall agent-shell-cwd-function)))))
-      (hoodoo/codex-start-in "/tmp/proj" "incident-42")
-      (should (equal tab-label "incident-42"))
-      (should (equal started-in-dir "/tmp/proj")))))
+(ert-deftest hoodoo/session-test-claude-start-in-delegates ()
+  (let (call-args)
+    (cl-letf (((symbol-function 'hoodoo/session--start-agent-in-tab)
+               (lambda (&rest args) (setq call-args args))))
+      (hoodoo/claude-start-in "/tmp/proj" "incident-42"))
+    (should (equal (nth 0 call-args) "/tmp/proj"))
+    (should (equal (nth 1 call-args) "incident-42"))
+    (should (equal (nth 2 call-args) '(agent-shell-anthropic agent-shell-project)))
+    (should (eq (nth 3 call-args) #'agent-shell-anthropic-start-claude-code))))
+
+(ert-deftest hoodoo/session-test-codex-start-in-delegates ()
+  (let (call-args)
+    (cl-letf (((symbol-function 'hoodoo/session--start-agent-in-tab)
+               (lambda (&rest args) (setq call-args args))))
+      (hoodoo/codex-start-in "/tmp/proj" "incident-42"))
+    (should (equal (nth 0 call-args) "/tmp/proj"))
+    (should (equal (nth 1 call-args) "incident-42"))
+    (should (equal (nth 2 call-args) '(agent-shell-openai agent-shell-project)))
+    (should (eq (nth 3 call-args) #'agent-shell-openai-start-codex))))
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: FAIL — `hoodoo/claude-start-in` is void.
+Expected: FAIL — `hoodoo/session--start-agent-in-tab` is void.
 
 - [ ] **Step 3: Write minimal implementation**
 
 Add to `hoodoo-session-context.el`, after `hoodoo/session--start-in-tab` (before the `add-hook` wiring line, so all `defun`s stay grouped):
 
 ```elisp
+(defun hoodoo/session--start-agent-in-tab (dir label require-features start-fn)
+  "Require REQUIRE-FEATURES, then start an agent shell rooted at DIR in a
+new tab named LABEL.  START-FN is called with no arguments, inside a
+`let' that binds `agent-shell-cwd-function' to return DIR."
+  (dolist (feature require-features)
+    (require feature))
+  (hoodoo/session--start-in-tab
+   label
+   (lambda ()
+     (let ((agent-shell-cwd-function (lambda () dir)))
+       (funcall start-fn)))))
+
 (defun hoodoo/claude-start-in (dir label)
   "Start a fresh Claude Code shell rooted at DIR, in its own tab named LABEL.
 Leaves existing Claude shells alone."
@@ -620,13 +691,10 @@ Leaves existing Claude shells alone."
                (or (when-let ((proj (project-current))) (project-root proj))
                    default-directory))))
      (list dir (read-string "Session label: " (hoodoo/session--default-label dir)))))
-  (require 'agent-shell-anthropic)
-  (require 'agent-shell-project)
-  (hoodoo/session--start-in-tab
-   label
-   (lambda ()
-     (let ((agent-shell-cwd-function (lambda () dir)))
-       (agent-shell-anthropic-start-claude-code)))))
+  (hoodoo/session--start-agent-in-tab
+   dir label
+   '(agent-shell-anthropic agent-shell-project)
+   #'agent-shell-anthropic-start-claude-code))
 
 (defun hoodoo/codex-start-in (dir label)
   "Start a fresh Codex shell rooted at DIR, in its own tab named LABEL.
@@ -637,19 +705,16 @@ Leaves existing Codex shells alone."
                (or (when-let ((proj (project-current))) (project-root proj))
                    default-directory))))
      (list dir (read-string "Session label: " (hoodoo/session--default-label dir)))))
-  (require 'agent-shell-openai)
-  (require 'agent-shell-project)
-  (hoodoo/session--start-in-tab
-   label
-   (lambda ()
-     (let ((agent-shell-cwd-function (lambda () dir)))
-       (agent-shell-openai-start-codex)))))
+  (hoodoo/session--start-agent-in-tab
+   dir label
+   '(agent-shell-openai agent-shell-project)
+   #'agent-shell-openai-start-codex))
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 15 tests, 15 results as expected`
+Expected: PASS — `Ran 19 tests, 19 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -747,7 +812,7 @@ session, display it via `display-buffer', and return it."
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 17 tests, 17 results as expected`
+Expected: PASS — `Ran 21 tests, 21 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -841,7 +906,7 @@ Add to `hoodoo-session-context.el`, after `hoodoo/session-dired`:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 19 tests, 19 results as expected`
+Expected: PASS — `Ran 23 tests, 23 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -905,7 +970,7 @@ Expected: `reached EOF cleanly` (same check used when this repo's `auto-side-win
 - [ ] **Step 3: Verify the full library still loads and all tests still pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 19 tests, 19 results as expected` (no regressions from the init.el rewiring, since `hoodoo-session-context.el` itself didn't change in this task).
+Expected: PASS — `Ran 23 tests, 23 results as expected` (no regressions from the init.el rewiring, since `hoodoo-session-context.el` itself didn't change in this task).
 
 - [ ] **Step 4: Commit**
 
