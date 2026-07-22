@@ -11,3 +11,4 @@ agent/history
 .codex/
 .agents/
 .agent-shell/transcripts/
+.claude/
