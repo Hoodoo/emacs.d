@@ -181,6 +181,26 @@ session, display it via `display-buffer', and return it."
   (interactive)
   (hoodoo/session--create-and-tag (lambda () (dired default-directory))))
 
+(defun hoodoo/session-attach-buffer (buffer)
+  "Attach an existing BUFFER to the current tab's agent-shell session."
+  (interactive
+   (let* ((session (hoodoo/session--require-current-session-buffer))
+          (candidates
+           (seq-remove
+            (lambda (buf)
+              (or (eq buf session)
+                  (eq (buffer-local-value 'hoodoo/session-buffer buf) session)))
+            (buffer-list))))
+     (list (get-buffer (completing-read "Attach buffer: "
+                                         (mapcar #'buffer-name candidates) nil t)))))
+  (let* ((session (hoodoo/session--require-current-session-buffer))
+         (existing (buffer-local-value 'hoodoo/session-buffer buffer)))
+    (when (and existing (not (eq existing session)) (buffer-live-p existing)
+               (not (y-or-n-p (format "%s is already attached to %s; reattach? "
+                                       (buffer-name buffer) (buffer-name existing)))))
+      (user-error "Not attaching %s" (buffer-name buffer)))
+    (hoodoo/session--tag-buffer buffer session)))
+
 (add-hook 'agent-shell-mode-hook #'hoodoo/session-mode-hook-fn)
 
 (provide 'hoodoo-session-context)

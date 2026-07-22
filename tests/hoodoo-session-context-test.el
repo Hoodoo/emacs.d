@@ -295,5 +295,38 @@
                         :type 'user-error))
       (delete-other-windows))))
 
+(ert-deftest hoodoo/session-test-attach-buffer ()
+  (let ((session (generate-new-buffer "agent"))
+        (target (generate-new-buffer "ssh-terminal")))
+    (unwind-protect
+        (progn
+          (delete-other-windows)
+          (with-current-buffer session (setq major-mode 'agent-shell-mode))
+          (switch-to-buffer session)
+          (hoodoo/session-attach-buffer target)
+          (should (eq (buffer-local-value 'hoodoo/session-buffer target) session)))
+      (mapc #'kill-buffer (list session target))
+      (delete-other-windows))))
+
+(ert-deftest hoodoo/session-test-attach-buffer-confirms-reassignment ()
+  (let ((session-a (generate-new-buffer "agent-a"))
+        (session-b (generate-new-buffer "agent-b"))
+        (target (generate-new-buffer "ssh-terminal"))
+        (asked nil))
+    (unwind-protect
+        (progn
+          (delete-other-windows)
+          (with-current-buffer session-b (setq major-mode 'agent-shell-mode))
+          (hoodoo/session--tag-buffer target session-a)
+          (switch-to-buffer session-b)
+          (cl-letf (((symbol-function 'y-or-n-p)
+                     (lambda (&rest _) (setq asked t) nil)))
+            (should-error (hoodoo/session-attach-buffer target) :type 'user-error))
+          (should asked)
+          ;; Declined reassignment: still attached to session-a.
+          (should (eq (buffer-local-value 'hoodoo/session-buffer target) session-a)))
+      (mapc #'kill-buffer (list session-a session-b target))
+      (delete-other-windows))))
+
 (provide 'hoodoo-session-context-test)
 ;;; hoodoo-session-context-test.el ends here
