@@ -74,5 +74,19 @@
       (mapc #'kill-buffer (list agent-buf-1 agent-buf-2))
       (delete-other-windows))))
 
+(ert-deftest hoodoo/session-test-current-session-buffer-same-buffer-two-windows ()
+  (let ((agent-buf (generate-new-buffer "agent")))
+    (unwind-protect
+        (progn
+          (delete-other-windows)
+          (with-current-buffer agent-buf (setq major-mode 'agent-shell-mode))
+          ;; The same buffer displayed in two windows (e.g. after `C-x 2')
+          ;; is still exactly one session buffer, not an ambiguous pair.
+          (switch-to-buffer agent-buf)
+          (set-window-buffer (split-window) agent-buf)
+          (should (eq (hoodoo/session--current-session-buffer) agent-buf)))
+      (kill-buffer agent-buf)
+      (delete-other-windows))))
+
 (provide 'hoodoo-session-context-test)
 ;;; hoodoo-session-context-test.el ends here

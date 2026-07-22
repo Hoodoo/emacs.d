@@ -47,9 +47,11 @@
   "Return the agent-shell buffer displayed in a window of FRAME, or nil
 unless there is exactly one."
   (let ((candidates
-         (seq-filter (lambda (buf)
-                       (eq (buffer-local-value 'major-mode buf) 'agent-shell-mode))
-                     (mapcar #'window-buffer (window-list frame 'no-mini)))))
+         (seq-uniq
+          (seq-filter (lambda (buf)
+                        (eq (buffer-local-value 'major-mode buf) 'agent-shell-mode))
+                      (mapcar #'window-buffer (window-list frame 'no-mini)))
+          #'eq)))
     (when (= (length candidates) 1)
       (car candidates))))
 
