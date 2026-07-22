@@ -35,5 +35,44 @@
           (should (null (hoodoo/session--attached-buffers session))))
       (kill-buffer session))))
 
+(ert-deftest hoodoo/session-test-current-session-buffer ()
+  (let ((agent-buf (generate-new-buffer "agent"))
+        (other-buf (generate-new-buffer "other")))
+    (unwind-protect
+        (progn
+          ;; Deterministic single-window baseline: `display-buffer'
+          ;; heuristics can reuse/split windows unpredictably, and
+          ;; leftover windows from earlier tests would make this test
+          ;; order-dependent. `switch-to-buffer' always replaces the
+          ;; buffer of the selected window.
+          (delete-other-windows)
+          (with-current-buffer agent-buf (setq major-mode 'agent-shell-mode))
+          (switch-to-buffer other-buf)
+          (should (null (hoodoo/session--current-session-buffer)))
+          (should-error (hoodoo/session--require-current-session-buffer)
+                        :type 'user-error)
+          (switch-to-buffer agent-buf)
+          (should (eq (hoodoo/session--current-session-buffer) agent-buf)))
+      (mapc #'kill-buffer (list agent-buf other-buf))
+      (delete-other-windows))))
+
+(ert-deftest hoodoo/session-test-current-session-buffer-ambiguous ()
+  (let ((agent-buf-1 (generate-new-buffer "agent-1"))
+        (agent-buf-2 (generate-new-buffer "agent-2")))
+    (unwind-protect
+        (progn
+          (delete-other-windows)
+          (with-current-buffer agent-buf-1 (setq major-mode 'agent-shell-mode))
+          (with-current-buffer agent-buf-2 (setq major-mode 'agent-shell-mode))
+          ;; `split-window' + `set-window-buffer' guarantees two real
+          ;; windows; relying on a `display-buffer' action alist like
+          ;; `display-buffer-pop-up-window' isn't deterministic in a
+          ;; batch/no-frame environment.
+          (switch-to-buffer agent-buf-1)
+          (set-window-buffer (split-window) agent-buf-2)
+          (should (null (hoodoo/session--current-session-buffer))))
+      (mapc #'kill-buffer (list agent-buf-1 agent-buf-2))
+      (delete-other-windows))))
+
 (provide 'hoodoo-session-context-test)
 ;;; hoodoo-session-context-test.el ends here

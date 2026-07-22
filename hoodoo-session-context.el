@@ -43,5 +43,21 @@
                     session-buffer))
               (buffer-list)))
 
+(defun hoodoo/session--current-session-buffer (&optional frame)
+  "Return the agent-shell buffer displayed in a window of FRAME, or nil
+unless there is exactly one."
+  (let ((candidates
+         (seq-filter (lambda (buf)
+                       (eq (buffer-local-value 'major-mode buf) 'agent-shell-mode))
+                     (mapcar #'window-buffer (window-list frame 'no-mini)))))
+    (when (= (length candidates) 1)
+      (car candidates))))
+
+(defun hoodoo/session--require-current-session-buffer ()
+  "Like `hoodoo/session--current-session-buffer', but signal `user-error'
+instead of returning nil."
+  (or (hoodoo/session--current-session-buffer)
+      (user-error "No agent-shell session in this tab")))
+
 (provide 'hoodoo-session-context)
 ;;; hoodoo-session-context.el ends here
