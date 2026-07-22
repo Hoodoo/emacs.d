@@ -205,7 +205,7 @@ git commit -m "Add buffer tagging and attached-buffer lookup"
 **Interfaces:**
 - Consumes: nothing new.
 - Produces:
-  - `hoodoo/session--current-session-buffer (&optional frame)` → the sole buffer with `major-mode` `agent-shell-mode` displayed in a window of FRAME (default selected frame), or nil if there isn't exactly one.
+  - `hoodoo/session--current-session-buffer (&optional frame)` → the sole buffer with `major-mode` `agent-shell-mode` displayed in a window of FRAME (default selected frame), or nil if there isn't exactly one. Dedupes by buffer identity (`seq-uniq ... #'eq`) before counting, so one buffer shown in multiple windows (e.g. after `C-x 2`) still counts as exactly one, not ambiguous.
   - `hoodoo/session--require-current-session-buffer ()` → same, but signals `user-error` instead of returning nil.
 
 - [ ] **Step 1: Write the failing tests**
@@ -251,6 +251,22 @@ Append to `tests/hoodoo-session-context-test.el`:
           (should (null (hoodoo/session--current-session-buffer))))
       (mapc #'kill-buffer (list agent-buf-1 agent-buf-2))
       (delete-other-windows))))
+
+(ert-deftest hoodoo/session-test-current-session-buffer-same-buffer-two-windows ()
+  (let ((agent-buf (generate-new-buffer "agent")))
+    (unwind-protect
+        (progn
+          (delete-other-windows)
+          (with-current-buffer agent-buf (setq major-mode 'agent-shell-mode))
+          ;; The same buffer displayed in two windows (e.g. after `C-x 2')
+          ;; is still exactly one session buffer, not an ambiguous pair —
+          ;; candidates must be deduped by buffer identity, not counted
+          ;; per window.
+          (switch-to-buffer agent-buf)
+          (set-window-buffer (split-window) agent-buf)
+          (should (eq (hoodoo/session--current-session-buffer) agent-buf)))
+      (kill-buffer agent-buf)
+      (delete-other-windows))))
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -267,9 +283,11 @@ Add to `hoodoo-session-context.el`, after `hoodoo/session--attached-buffers`:
   "Return the agent-shell buffer displayed in a window of FRAME, or nil
 unless there is exactly one."
   (let ((candidates
-         (seq-filter (lambda (buf)
-                       (eq (buffer-local-value 'major-mode buf) 'agent-shell-mode))
-                     (mapcar #'window-buffer (window-list frame 'no-mini)))))
+         (seq-uniq
+          (seq-filter (lambda (buf)
+                        (eq (buffer-local-value 'major-mode buf) 'agent-shell-mode))
+                      (mapcar #'window-buffer (window-list frame 'no-mini)))
+          #'eq)))
     (when (= (length candidates) 1)
       (car candidates))))
 
@@ -283,7 +301,7 @@ instead of returning nil."
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 5 tests, 5 results as expected`
+Expected: PASS — `Ran 6 tests, 6 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -417,7 +435,7 @@ kill attached context buffers, then closes the session's tab."
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 9 tests, 9 results as expected`
+Expected: PASS — `Ran 10 tests, 10 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -546,7 +564,7 @@ Note: `agent-shell-mode-hook` here is the forward declaration from Task 1 (or th
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 13 tests, 13 results as expected`
+Expected: PASS — `Ran 14 tests, 14 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -665,7 +683,7 @@ Leaves existing Codex shells alone."
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 16 tests, 16 results as expected`
+Expected: PASS — `Ran 17 tests, 17 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -763,7 +781,7 @@ session, display it via `display-buffer', and return it."
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 18 tests, 18 results as expected`
+Expected: PASS — `Ran 19 tests, 19 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -857,7 +875,7 @@ Add to `hoodoo-session-context.el`, after `hoodoo/session-dired`:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 20 tests, 20 results as expected`
+Expected: PASS — `Ran 21 tests, 21 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -921,7 +939,7 @@ Expected: `reached EOF cleanly` (same check used when this repo's `auto-side-win
 - [ ] **Step 3: Verify the full library still loads and all tests still pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 20 tests, 20 results as expected` (no regressions from the init.el rewiring, since `hoodoo-session-context.el` itself didn't change in this task).
+Expected: PASS — `Ran 21 tests, 21 results as expected` (no regressions from the init.el rewiring, since `hoodoo-session-context.el` itself didn't change in this task).
 
 - [ ] **Step 4: Commit**
 
