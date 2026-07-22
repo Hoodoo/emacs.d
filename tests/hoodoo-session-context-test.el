@@ -354,5 +354,28 @@ even though the selected window really does show the new buffer.
       (mapc #'kill-buffer (list session-a session-b target))
       (delete-other-windows))))
 
+(ert-deftest hoodoo/session-test-consult-buffer-names ()
+  (let ((session (generate-new-buffer "agent"))
+        (eat-buf (generate-new-buffer "eat")))
+    (unwind-protect
+        (progn
+          (delete-other-windows)
+          (with-current-buffer session (setq major-mode 'agent-shell-mode))
+          (switch-to-buffer session)
+          (hoodoo/session--tag-buffer eat-buf session)
+          (should (equal (sort (hoodoo/session--consult-buffer-names) #'string<)
+                          (sort (list "agent" "eat") #'string<))))
+      (mapc #'kill-buffer (list session eat-buf))
+      (delete-other-windows))))
+
+(ert-deftest hoodoo/session-test-consult-buffer-names-no-session ()
+  (let ((scratch (get-buffer-create "*scratch*")))
+    (unwind-protect
+        (progn
+          (delete-other-windows)
+          (switch-to-buffer scratch)
+          (should (null (hoodoo/session--consult-buffer-names))))
+      (delete-other-windows))))
+
 (provide 'hoodoo-session-context-test)
 ;;; hoodoo-session-context-test.el ends here

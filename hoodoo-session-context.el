@@ -211,5 +211,25 @@ new buffer."
 
 (add-hook 'agent-shell-mode-hook #'hoodoo/session-mode-hook-fn)
 
+;;;; consult-buffer integration
+
+(defun hoodoo/session--consult-buffer-names ()
+  "Names of the current tab's session buffer and its attached buffers,
+for use as a `consult-buffer' source's :items function."
+  (when-let ((session (hoodoo/session--current-session-buffer)))
+    (mapcar #'buffer-name
+            (cons session (hoodoo/session--attached-buffers session)))))
+
+(with-eval-after-load 'consult
+  (defvar hoodoo/session-consult-source
+    `(:name     "Session"
+      :narrow   ?s
+      :category buffer
+      :face     consult-buffer
+      :history  buffer-name-history
+      :state    ,#'consult--buffer-state
+      :items    ,#'hoodoo/session--consult-buffer-names))
+  (add-to-list 'consult-buffer-sources 'hoodoo/session-consult-source))
+
 (provide 'hoodoo-session-context)
 ;;; hoodoo-session-context.el ends here
