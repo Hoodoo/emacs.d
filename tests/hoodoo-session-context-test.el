@@ -231,5 +231,40 @@
     ;; Binding must not leak after the call.
     (should (null hoodoo/session--pending-label))))
 
+(ert-deftest hoodoo/session-test-start-agent-in-tab ()
+  (let ((tab-label nil) (required nil) (started-in-dir nil))
+    (cl-letf (((symbol-function 'hoodoo/session--start-in-tab)
+               (lambda (label start-fn)
+                 (setq tab-label label)
+                 (funcall start-fn)))
+              ((symbol-function 'require)
+               (lambda (feature &rest _) (push feature required) feature)))
+      (hoodoo/session--start-agent-in-tab
+       "/tmp/proj" "incident-42" '(fake-feature-a fake-feature-b)
+       (lambda () (setq started-in-dir (funcall agent-shell-cwd-function)))))
+    (should (equal tab-label "incident-42"))
+    (should (equal (reverse required) '(fake-feature-a fake-feature-b)))
+    (should (equal started-in-dir "/tmp/proj"))))
+
+(ert-deftest hoodoo/session-test-claude-start-in-delegates ()
+  (let (call-args)
+    (cl-letf (((symbol-function 'hoodoo/session--start-agent-in-tab)
+               (lambda (&rest args) (setq call-args args))))
+      (hoodoo/claude-start-in "/tmp/proj" "incident-42"))
+    (should (equal (nth 0 call-args) "/tmp/proj"))
+    (should (equal (nth 1 call-args) "incident-42"))
+    (should (equal (nth 2 call-args) '(agent-shell-anthropic agent-shell-project)))
+    (should (eq (nth 3 call-args) #'agent-shell-anthropic-start-claude-code))))
+
+(ert-deftest hoodoo/session-test-codex-start-in-delegates ()
+  (let (call-args)
+    (cl-letf (((symbol-function 'hoodoo/session--start-agent-in-tab)
+               (lambda (&rest args) (setq call-args args))))
+      (hoodoo/codex-start-in "/tmp/proj" "incident-42"))
+    (should (equal (nth 0 call-args) "/tmp/proj"))
+    (should (equal (nth 1 call-args) "incident-42"))
+    (should (equal (nth 2 call-args) '(agent-shell-openai agent-shell-project)))
+    (should (eq (nth 3 call-args) #'agent-shell-openai-start-codex))))
+
 (provide 'hoodoo-session-context-test)
 ;;; hoodoo-session-context-test.el ends here

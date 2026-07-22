@@ -117,6 +117,46 @@ inside it with `hoodoo/session--pending-label' bound to LABEL."
   (let ((hoodoo/session--pending-label label))
     (funcall start-function)))
 
+(defun hoodoo/session--start-agent-in-tab (dir label require-features start-fn)
+  "Require REQUIRE-FEATURES, then start an agent shell rooted at DIR in a
+new tab named LABEL.  START-FN is called with no arguments, inside a
+`let' that binds `agent-shell-cwd-function' to return DIR."
+  (dolist (feature require-features)
+    (require feature))
+  (hoodoo/session--start-in-tab
+   label
+   (lambda ()
+     (let ((agent-shell-cwd-function (lambda () dir)))
+       (funcall start-fn)))))
+
+(defun hoodoo/claude-start-in (dir label)
+  "Start a fresh Claude Code shell rooted at DIR, in its own tab named LABEL.
+Leaves existing Claude shells alone."
+  (interactive
+   (let ((dir (read-directory-name
+               "Start Claude in: "
+               (or (when-let ((proj (project-current))) (project-root proj))
+                   default-directory))))
+     (list dir (read-string "Session label: " (hoodoo/session--default-label dir)))))
+  (hoodoo/session--start-agent-in-tab
+   dir label
+   '(agent-shell-anthropic agent-shell-project)
+   #'agent-shell-anthropic-start-claude-code))
+
+(defun hoodoo/codex-start-in (dir label)
+  "Start a fresh Codex shell rooted at DIR, in its own tab named LABEL.
+Leaves existing Codex shells alone."
+  (interactive
+   (let ((dir (read-directory-name
+               "Start Codex in: "
+               (or (when-let ((proj (project-current))) (project-root proj))
+                   default-directory))))
+     (list dir (read-string "Session label: " (hoodoo/session--default-label dir)))))
+  (hoodoo/session--start-agent-in-tab
+   dir label
+   '(agent-shell-openai agent-shell-project)
+   #'agent-shell-openai-start-codex))
+
 (add-hook 'agent-shell-mode-hook #'hoodoo/session-mode-hook-fn)
 
 (provide 'hoodoo-session-context)
