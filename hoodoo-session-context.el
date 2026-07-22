@@ -28,5 +28,20 @@
   "Compute the default session label for DIR: its basename."
   (file-name-nondirectory (directory-file-name dir)))
 
+(defvar-local hoodoo/session-buffer nil
+  "The agent-shell buffer this buffer is attached to, or nil.")
+
+(defun hoodoo/session--tag-buffer (buffer session-buffer)
+  "Attach BUFFER to SESSION-BUFFER."
+  (with-current-buffer buffer
+    (setq-local hoodoo/session-buffer session-buffer)))
+
+(defun hoodoo/session--attached-buffers (session-buffer)
+  "Return live buffers attached to SESSION-BUFFER."
+  (seq-filter (lambda (buf)
+                (eq (buffer-local-value 'hoodoo/session-buffer buf)
+                    session-buffer))
+              (buffer-list)))
+
 (provide 'hoodoo-session-context)
 ;;; hoodoo-session-context.el ends here
