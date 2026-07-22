@@ -352,12 +352,33 @@ Append to `tests/hoodoo-session-context-test.el`:
       ;; Should not signal, since there's only one tab.
       (hoodoo/session--close-current-tab-safely))))
 
+(ert-deftest hoodoo/session-test-close-current-tab-safely-multiple-tabs-closes ()
+  (let ((tab-bar-mode t)
+        (closed nil))
+    (cl-letf (((symbol-function 'tab-bar-tabs)
+               (lambda () (list "tab-1" "tab-2")))
+              ((symbol-function 'tab-bar-close-tab)
+               (lambda (&rest _) (setq closed t))))
+      (hoodoo/session--close-current-tab-safely)
+      (should closed))))
+
+(ert-deftest hoodoo/session-test-close-current-tab-safely-tab-bar-off-noop ()
+  (let ((tab-bar-mode nil))
+    (cl-letf (((symbol-function 'tab-bar-tabs)
+               (lambda (&rest _) (error "should not be called")))
+              ((symbol-function 'tab-bar-close-tab)
+               (lambda (&rest _) (error "should not be called"))))
+      ;; Should not signal, and should short-circuit before ever
+      ;; consulting `tab-bar-tabs', since `tab-bar-mode' is off.
+      (hoodoo/session--close-current-tab-safely))))
+
 (ert-deftest hoodoo/session-test-on-session-kill-prompts-and-kills-defaults ()
   (let ((session (generate-new-buffer "session"))
         (eat-buf (generate-new-buffer "eat"))
         (dired-buf (generate-new-buffer "dired"))
         (tab-closed nil)
-        (prompt-arg nil))
+        (prompt-arg nil)
+        (captured-def nil))
     (unwind-protect
         (progn
           (with-current-buffer eat-buf (setq major-mode 'eat-mode))
@@ -365,14 +386,24 @@ Append to `tests/hoodoo-session-context-test.el`:
           (hoodoo/session--tag-buffer eat-buf session)
           (hoodoo/session--tag-buffer dired-buf session)
           (cl-letf (((symbol-function 'completing-read-multiple)
-                     (lambda (prompt _collection &rest _)
+                     (lambda (prompt collection &optional predicate
+                                     require-match initial-input hist def
+                                     &rest _)
+                       (ignore collection predicate require-match
+                               initial-input hist)
                        (setq prompt-arg prompt)
+                       (setq captured-def def)
                        (list (buffer-name eat-buf))))
                     ((symbol-function 'hoodoo/session--close-current-tab-safely)
                      (lambda () (setq tab-closed t))))
             (with-current-buffer session
               (hoodoo/session--on-session-kill)))
           (should (string-match-p "eat" prompt-arg))
+          ;; The DEF argument (7th positional) passed to
+          ;; `completing-read-multiple' should pre-select only the
+          ;; default-checked buffers: "eat" present, "dired" absent.
+          (should (string-match-p "eat" captured-def))
+          (should-not (string-match-p "dired" captured-def))
           (should-not (buffer-live-p eat-buf))
           (should (buffer-live-p dired-buf))
           (should tab-closed))
@@ -435,7 +466,7 @@ kill attached context buffers, then closes the session's tab."
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 10 tests, 10 results as expected`
+Expected: PASS — `Ran 12 tests, 12 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -564,7 +595,7 @@ Note: `agent-shell-mode-hook` here is the forward declaration from Task 1 (or th
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 14 tests, 14 results as expected`
+Expected: PASS — `Ran 16 tests, 16 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -683,7 +714,7 @@ Leaves existing Codex shells alone."
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 17 tests, 17 results as expected`
+Expected: PASS — `Ran 19 tests, 19 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -781,7 +812,7 @@ session, display it via `display-buffer', and return it."
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 19 tests, 19 results as expected`
+Expected: PASS — `Ran 21 tests, 21 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -875,7 +906,7 @@ Add to `hoodoo-session-context.el`, after `hoodoo/session-dired`:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 21 tests, 21 results as expected`
+Expected: PASS — `Ran 23 tests, 23 results as expected`
 
 - [ ] **Step 5: Commit**
 
@@ -939,7 +970,7 @@ Expected: `reached EOF cleanly` (same check used when this repo's `auto-side-win
 - [ ] **Step 3: Verify the full library still loads and all tests still pass**
 
 Run: `emacs -Q --batch -l ert -l hoodoo-session-context.el -l tests/hoodoo-session-context-test.el -f ert-run-tests-batch-and-exit`
-Expected: PASS — `Ran 21 tests, 21 results as expected` (no regressions from the init.el rewiring, since `hoodoo-session-context.el` itself didn't change in this task).
+Expected: PASS — `Ran 23 tests, 23 results as expected` (no regressions from the init.el rewiring, since `hoodoo-session-context.el` itself didn't change in this task).
 
 - [ ] **Step 4: Commit**
 
