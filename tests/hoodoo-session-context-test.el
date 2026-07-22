@@ -110,12 +110,33 @@
       ;; Should not signal, since there's only one tab.
       (hoodoo/session--close-current-tab-safely))))
 
+(ert-deftest hoodoo/session-test-close-current-tab-safely-multiple-tabs-closes ()
+  (let ((tab-bar-mode t)
+        (closed nil))
+    (cl-letf (((symbol-function 'tab-bar-tabs)
+               (lambda () (list "tab-1" "tab-2")))
+              ((symbol-function 'tab-bar-close-tab)
+               (lambda (&rest _) (setq closed t))))
+      (hoodoo/session--close-current-tab-safely)
+      (should closed))))
+
+(ert-deftest hoodoo/session-test-close-current-tab-safely-tab-bar-off-noop ()
+  (let ((tab-bar-mode nil))
+    (cl-letf (((symbol-function 'tab-bar-tabs)
+               (lambda (&rest _) (error "should not be called")))
+              ((symbol-function 'tab-bar-close-tab)
+               (lambda (&rest _) (error "should not be called"))))
+      ;; Should not signal, and should short-circuit before ever
+      ;; consulting `tab-bar-tabs', since `tab-bar-mode' is off.
+      (hoodoo/session--close-current-tab-safely))))
+
 (ert-deftest hoodoo/session-test-on-session-kill-prompts-and-kills-defaults ()
   (let ((session (generate-new-buffer "session"))
         (eat-buf (generate-new-buffer "eat"))
         (dired-buf (generate-new-buffer "dired"))
         (tab-closed nil)
-        (prompt-arg nil))
+        (prompt-arg nil)
+        (captured-def nil))
     (unwind-protect
         (progn
           (with-current-buffer eat-buf (setq major-mode 'eat-mode))
@@ -123,14 +144,24 @@
           (hoodoo/session--tag-buffer eat-buf session)
           (hoodoo/session--tag-buffer dired-buf session)
           (cl-letf (((symbol-function 'completing-read-multiple)
-                     (lambda (prompt _collection &rest _)
+                     (lambda (prompt collection &optional predicate
+                                     require-match initial-input hist def
+                                     &rest _)
+                       (ignore collection predicate require-match
+                               initial-input hist)
                        (setq prompt-arg prompt)
+                       (setq captured-def def)
                        (list (buffer-name eat-buf))))
                     ((symbol-function 'hoodoo/session--close-current-tab-safely)
                      (lambda () (setq tab-closed t))))
             (with-current-buffer session
               (hoodoo/session--on-session-kill)))
           (should (string-match-p "eat" prompt-arg))
+          ;; The DEF argument (7th positional) passed to
+          ;; `completing-read-multiple' should pre-select only the
+          ;; default-checked buffers: "eat" present, "dired" absent.
+          (should (string-match-p "eat" captured-def))
+          (should-not (string-match-p "dired" captured-def))
           (should-not (buffer-live-p eat-buf))
           (should (buffer-live-p dired-buf))
           (should tab-closed))
