@@ -61,5 +61,33 @@ instead of returning nil."
   (or (hoodoo/session--current-session-buffer)
       (user-error "No agent-shell session in this tab")))
 
+(defun hoodoo/session--default-checked-p (buffer)
+  "Whether BUFFER should be pre-checked for killing when its session ends."
+  (memq (buffer-local-value 'major-mode buffer) '(eat-mode magit-status-mode)))
+
+(defun hoodoo/session--close-current-tab-safely ()
+  "Close the current tab, tolerating tab-bar being off or there being
+only one tab left."
+  (when (and (bound-and-true-p tab-bar-mode)
+             (> (length (tab-bar-tabs)) 1))
+    (ignore-errors (tab-bar-close-tab))))
+
+(defun hoodoo/session--on-session-kill ()
+  "Buffer-local `kill-buffer-hook' for agent-shell buffers.  Offers to
+kill attached context buffers, then closes the session's tab."
+  (let ((attached (hoodoo/session--attached-buffers (current-buffer))))
+    (when attached
+      (let* ((default-buffers (seq-filter #'hoodoo/session--default-checked-p attached))
+             (default-names (mapcar #'buffer-name default-buffers))
+             (chosen (completing-read-multiple
+                      (format "Kill attached buffers (default: %s): "
+                              (string-join default-names ", "))
+                      (mapcar #'buffer-name attached)
+                      nil t nil nil (string-join default-names ","))))
+        (dolist (name chosen)
+          (when-let ((buf (get-buffer name)))
+            (kill-buffer buf))))))
+  (hoodoo/session--close-current-tab-safely))
+
 (provide 'hoodoo-session-context)
 ;;; hoodoo-session-context.el ends here

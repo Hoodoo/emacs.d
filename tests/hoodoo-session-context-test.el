@@ -88,5 +88,67 @@
       (kill-buffer agent-buf)
       (delete-other-windows))))
 
+(ert-deftest hoodoo/session-test-default-checked-p ()
+  (let ((eat-buf (generate-new-buffer "eat"))
+        (magit-buf (generate-new-buffer "magit"))
+        (dired-buf (generate-new-buffer "dired")))
+    (unwind-protect
+        (progn
+          (with-current-buffer eat-buf (setq major-mode 'eat-mode))
+          (with-current-buffer magit-buf (setq major-mode 'magit-status-mode))
+          (with-current-buffer dired-buf (setq major-mode 'dired-mode))
+          (should (hoodoo/session--default-checked-p eat-buf))
+          (should (hoodoo/session--default-checked-p magit-buf))
+          (should-not (hoodoo/session--default-checked-p dired-buf)))
+      (mapc #'kill-buffer (list eat-buf magit-buf dired-buf)))))
+
+(ert-deftest hoodoo/session-test-close-current-tab-safely-single-tab-noop ()
+  (let ((tab-bar-mode t))
+    (cl-letf (((symbol-function 'tab-bar-tabs) (lambda () (list "only-tab")))
+              ((symbol-function 'tab-bar-close-tab)
+               (lambda (&rest _) (error "should not be called"))))
+      ;; Should not signal, since there's only one tab.
+      (hoodoo/session--close-current-tab-safely))))
+
+(ert-deftest hoodoo/session-test-on-session-kill-prompts-and-kills-defaults ()
+  (let ((session (generate-new-buffer "session"))
+        (eat-buf (generate-new-buffer "eat"))
+        (dired-buf (generate-new-buffer "dired"))
+        (tab-closed nil)
+        (prompt-arg nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer eat-buf (setq major-mode 'eat-mode))
+          (with-current-buffer dired-buf (setq major-mode 'dired-mode))
+          (hoodoo/session--tag-buffer eat-buf session)
+          (hoodoo/session--tag-buffer dired-buf session)
+          (cl-letf (((symbol-function 'completing-read-multiple)
+                     (lambda (prompt _collection &rest _)
+                       (setq prompt-arg prompt)
+                       (list (buffer-name eat-buf))))
+                    ((symbol-function 'hoodoo/session--close-current-tab-safely)
+                     (lambda () (setq tab-closed t))))
+            (with-current-buffer session
+              (hoodoo/session--on-session-kill)))
+          (should (string-match-p "eat" prompt-arg))
+          (should-not (buffer-live-p eat-buf))
+          (should (buffer-live-p dired-buf))
+          (should tab-closed))
+      (mapc (lambda (b) (when (buffer-live-p b) (kill-buffer b)))
+            (list session eat-buf dired-buf)))))
+
+(ert-deftest hoodoo/session-test-on-session-kill-noop-when-nothing-attached ()
+  (let ((session (generate-new-buffer "session"))
+        (tab-closed nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'completing-read-multiple)
+                   (lambda (&rest _) (error "should not prompt")))
+                  ((symbol-function 'hoodoo/session--close-current-tab-safely)
+                   (lambda () (setq tab-closed t))))
+          (with-current-buffer session
+            (hoodoo/session--on-session-kill))
+          (should tab-closed))
+      (kill-buffer session))))
+
 (provide 'hoodoo-session-context-test)
 ;;; hoodoo-session-context-test.el ends here
