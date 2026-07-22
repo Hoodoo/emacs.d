@@ -157,6 +157,30 @@ Leaves existing Codex shells alone."
    '(agent-shell-openai agent-shell-project)
    #'agent-shell-openai-start-codex))
 
+(defun hoodoo/session--create-and-tag (create-fn)
+  "Call CREATE-FN, tag the buffer it leaves current to the current tab's
+session, display it via `display-buffer', and return it."
+  (let* ((session (hoodoo/session--require-current-session-buffer))
+         (buf (save-window-excursion (funcall create-fn) (current-buffer))))
+    (hoodoo/session--tag-buffer buf session)
+    (display-buffer buf)
+    buf))
+
+(defun hoodoo/session-eat ()
+  "Open an eat buffer tagged to the current tab's agent-shell session."
+  (interactive)
+  (hoodoo/session--create-and-tag #'eat))
+
+(defun hoodoo/session-magit-status ()
+  "Open magit-status tagged to the current tab's agent-shell session."
+  (interactive)
+  (hoodoo/session--create-and-tag #'magit-status))
+
+(defun hoodoo/session-dired ()
+  "Open dired tagged to the current tab's agent-shell session."
+  (interactive)
+  (hoodoo/session--create-and-tag (lambda () (dired default-directory))))
+
 (add-hook 'agent-shell-mode-hook #'hoodoo/session-mode-hook-fn)
 
 (provide 'hoodoo-session-context)

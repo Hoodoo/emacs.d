@@ -266,5 +266,34 @@
     (should (equal (nth 2 call-args) '(agent-shell-openai agent-shell-project)))
     (should (eq (nth 3 call-args) #'agent-shell-openai-start-codex))))
 
+(ert-deftest hoodoo/session-test-create-and-tag ()
+  (let ((session (generate-new-buffer "agent"))
+        (created (generate-new-buffer "fake-eat"))
+        (displayed nil))
+    (unwind-protect
+        (progn
+          (delete-other-windows)
+          (with-current-buffer session (setq major-mode 'agent-shell-mode))
+          (switch-to-buffer session)
+          (cl-letf (((symbol-function 'display-buffer)
+                     (lambda (buf &rest _) (setq displayed buf) nil)))
+            (let ((result (hoodoo/session--create-and-tag
+                            (lambda () (switch-to-buffer created)))))
+              (should (eq result created))))
+          (should (eq (buffer-local-value 'hoodoo/session-buffer created) session))
+          (should (eq displayed created)))
+      (mapc #'kill-buffer (list session created))
+      (delete-other-windows))))
+
+(ert-deftest hoodoo/session-test-create-and-tag-requires-session ()
+  (let ((scratch (get-buffer-create "*scratch*")))
+    (unwind-protect
+        (progn
+          (delete-other-windows)
+          (switch-to-buffer scratch)
+          (should-error (hoodoo/session--create-and-tag (lambda () nil))
+                        :type 'user-error))
+      (delete-other-windows))))
+
 (provide 'hoodoo-session-context-test)
 ;;; hoodoo-session-context-test.el ends here
