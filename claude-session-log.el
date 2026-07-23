@@ -151,5 +151,72 @@ which case this returns nil."
                       (plist-get (plist-get block :input) :file_path)))
                   content))))
 
+(defun claude-session-log--parse-lines (session-id source-path lines)
+  "Fold parsed JSONL LINES into a `claude-session-log-session' struct
+for SESSION-ID at SOURCE-PATH. `cost-by-model', `total-cost',
+`unpriced-models', and `subagents' are left nil -- callers fill those
+in separately (see `claude-session-log--apply-costs' and
+`claude-session-log--find-subagent-meta-files')."
+  (let ((usage-table (make-hash-table :test #'equal))
+        models files-touched cwds branches events
+        task-list start-time end-time)
+    (dolist (line lines)
+      (let ((timestamp (plist-get line :timestamp))
+            (type (plist-get line :type)))
+        (when timestamp
+          (unless start-time (setq start-time timestamp))
+          (setq end-time timestamp))
+        (when-let ((cwd (plist-get line :cwd)))
+          (cl-pushnew cwd cwds :test #'equal))
+        (when-let ((branch (plist-get line :gitBranch)))
+          (cl-pushnew branch branches :test #'equal))
+        (cond
+         ((equal type "assistant")
+          (let* ((message (plist-get line :message))
+                 (model (plist-get message :model))
+                 (usage (plist-get message :usage)))
+            (when (and model (not (equal model "<synthetic>")))
+              (cl-pushnew model models :test #'equal)
+              (when usage
+                (let ((normalized (claude-session-log--usage-plist-from-json usage))
+                      (existing (or (gethash model usage-table)
+                                    (claude-session-log--zero-usage))))
+                  (puthash model (claude-session-log--merge-usage existing normalized)
+                           usage-table))))
+            (dolist (path (claude-session-log--file-touches-in-content
+                           (plist-get message :content)))
+              (cl-pushnew path files-touched :test #'equal))
+            (push (list :timestamp timestamp :type type
+                        :role (plist-get message :role) :model model
+                        :is-meta (plist-get line :isMeta)
+                        :prompt-source (plist-get line :promptSource))
+                  events)))
+         ((equal type "user")
+          (let ((message (plist-get line :message)))
+            (push (list :timestamp timestamp :type type
+                        :role (plist-get message :role) :model nil
+                        :is-meta (plist-get line :isMeta)
+                        :prompt-source (plist-get line :promptSource))
+                  events)))
+         ((equal type "attachment")
+          (let ((attachment (plist-get line :attachment)))
+            (when (equal (plist-get attachment :type) "task_reminder")
+              (setq task-list attachment)))))))
+    (make-claude-session-log-session
+     :session-id session-id
+     :source-path source-path
+     :start-time start-time
+     :end-time end-time
+     :duration-seconds (claude-session-log--seconds-between start-time end-time)
+     :models (nreverse models)
+     :usage-by-model (let (alist)
+                        (maphash (lambda (k v) (push (cons k v) alist)) usage-table)
+                        alist)
+     :files-touched (nreverse files-touched)
+     :cwds (nreverse cwds)
+     :branches (nreverse branches)
+     :task-list task-list
+     :events (nreverse events))))
+
 (provide 'claude-session-log)
 ;;; claude-session-log.el ends here

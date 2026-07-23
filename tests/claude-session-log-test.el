@@ -114,5 +114,101 @@
 (ert-deftest claude-session-log-test-file-touches-in-content-nil ()
   (should (null (claude-session-log--file-touches-in-content nil))))
 
+(defconst claude-session-log-test--fixture-lines
+  (list
+   '(:type "user" :timestamp "2026-07-21T10:00:00.000Z"
+     :cwd "/home/hoooo/.emacs.d" :gitBranch "main"
+     :message (:role "user" :content "Do the thing"))
+   '(:type "assistant" :timestamp "2026-07-21T10:00:05.000Z"
+     :cwd "/home/hoooo/.emacs.d" :gitBranch "main"
+     :message (:role "assistant" :model "claude-sonnet-5"
+               :content ((:type "text" :text "ok")
+                         (:type "tool_use" :id "tu1" :name "Edit"
+                          :input (:file_path "/home/hoooo/.emacs.d/init.el"
+                                  :old_string "a" :new_string "b")))
+               :usage (:input_tokens 100 :output_tokens 50
+                       :cache_creation_input_tokens 200
+                       :cache_read_input_tokens 300
+                       :cache_creation (:ephemeral_5m_input_tokens 0
+                                        :ephemeral_1h_input_tokens 200))))
+   '(:type "assistant" :timestamp "2026-07-21T10:00:06.000Z"
+     :message (:role "assistant" :model "<synthetic>"
+               :content ((:type "text" :text "interrupted"))))
+   '(:type "assistant" :timestamp "2026-07-21T10:00:10.000Z"
+     :cwd "/home/hoooo/.emacs.d" :gitBranch "worktree-agent-shell"
+     :message (:role "assistant" :model "claude-sonnet-5"
+               :content ((:type "tool_use" :id "tu2" :name "Read"
+                          :input (:file_path "/home/hoooo/.emacs.d/init.el")))
+               :usage (:input_tokens 10 :output_tokens 5
+                       :cache_creation_input_tokens 40
+                       :cache_read_input_tokens 0)))
+   '(:type "attachment" :timestamp "2026-07-21T10:00:11.000Z"
+     :attachment (:type "task_reminder" :itemCount 1
+                  :content ((:id "1" :subject "Task 1" :description "d1"
+                             :status "pending" :blocks () :blockedBy ()))))
+   '(:type "attachment" :timestamp "2026-07-21T10:00:12.000Z"
+     :attachment (:type "task_reminder" :itemCount 1
+                  :content ((:id "1" :subject "Task 1" :description "d1"
+                             :status "completed" :blocks () :blockedBy ())))))
+  "Shared fixture for `claude-session-log--parse-lines' tests, mirroring
+verified real Claude Code JSONL line shapes.")
+
+(ert-deftest claude-session-log-test-parse-lines-times ()
+  (let ((s (claude-session-log--parse-lines
+            "test-session" "/tmp/test-session.jsonl"
+            claude-session-log-test--fixture-lines)))
+    (should (equal (claude-session-log-session-start-time s) "2026-07-21T10:00:00.000Z"))
+    (should (equal (claude-session-log-session-end-time s) "2026-07-21T10:00:12.000Z"))
+    (should (= (claude-session-log-session-duration-seconds s) 12.0))))
+
+(ert-deftest claude-session-log-test-parse-lines-models-and-usage ()
+  (let ((s (claude-session-log--parse-lines
+            "test-session" "/tmp/test-session.jsonl"
+            claude-session-log-test--fixture-lines)))
+    ;; "<synthetic>" must be excluded.
+    (should (equal (claude-session-log-session-models s) '("claude-sonnet-5")))
+    (should (equal (cdr (assoc "claude-sonnet-5" (claude-session-log-session-usage-by-model s)))
+                   '(:input 110 :output 55 :cache-write-5m 40
+                     :cache-write-1h 200 :cache-read 300)))))
+
+(ert-deftest claude-session-log-test-parse-lines-files-cwds-branches ()
+  (let ((s (claude-session-log--parse-lines
+            "test-session" "/tmp/test-session.jsonl"
+            claude-session-log-test--fixture-lines)))
+    ;; Edit and Read both touch the same file -- deduped to one entry.
+    (should (equal (claude-session-log-session-files-touched s)
+                   '("/home/hoooo/.emacs.d/init.el")))
+    (should (equal (claude-session-log-session-cwds s) '("/home/hoooo/.emacs.d")))
+    (should (equal (claude-session-log-session-branches s)
+                   '("main" "worktree-agent-shell")))))
+
+(ert-deftest claude-session-log-test-parse-lines-task-list-last-wins ()
+  (let* ((s (claude-session-log--parse-lines
+             "test-session" "/tmp/test-session.jsonl"
+             claude-session-log-test--fixture-lines))
+         (task-list (claude-session-log-session-task-list s)))
+    (should (equal (plist-get (car (plist-get task-list :content)) :status)
+                   "completed"))))
+
+(ert-deftest claude-session-log-test-parse-lines-events ()
+  (let* ((s (claude-session-log--parse-lines
+             "test-session" "/tmp/test-session.jsonl"
+             claude-session-log-test--fixture-lines))
+         (events (claude-session-log-session-events s)))
+    ;; One event per user/assistant line (3 assistant + 1 user); the two
+    ;; `attachment' lines don't produce events.
+    (should (= (length events) 4))
+    (should (equal (mapcar (lambda (e) (plist-get e :role)) events)
+                   '("user" "assistant" "assistant" "assistant")))))
+
+(ert-deftest claude-session-log-test-parse-lines-leaves-cost-and-subagents-nil ()
+  (let ((s (claude-session-log--parse-lines
+            "test-session" "/tmp/test-session.jsonl"
+            claude-session-log-test--fixture-lines)))
+    (should (null (claude-session-log-session-cost-by-model s)))
+    (should (null (claude-session-log-session-total-cost s)))
+    (should (null (claude-session-log-session-unpriced-models s)))
+    (should (null (claude-session-log-session-subagents s)))))
+
 (provide 'claude-session-log-test)
 ;;; claude-session-log-test.el ends here
