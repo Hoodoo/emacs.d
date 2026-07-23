@@ -76,11 +76,13 @@ files:
                           ; "<synthetic>" excluded)
   usage-by-model          ; alist: model -> plist (:input :output
                           ;   :cache-write-5m :cache-write-1h :cache-read)
-  cost-by-model           ; alist: model -> dollars (float), folds in subagent
-                          ; usage recursively -- this is "real cost", per
-                          ; user decision to count subagent spend as spend
+  cost-by-model           ; alist: model -> dollars (float), MAIN SESSION ONLY
+                          ; (subagent costs are not folded in here -- see
+                          ; total-cost below)
+  total-cost              ; sum of cost-by-model, PLUS every subagent's own
+                          ; cost folded in -- this is "real cost", per user
+                          ; decision to count subagent spend as spend
                           ; incurred on the session's behalf
-  total-cost              ; sum of cost-by-model
   unpriced-models         ; models seen with no price-table entry; their
                           ; usage is counted but costs $0, flagged here so a
                           ; caller can surface "some costs may be incomplete"
