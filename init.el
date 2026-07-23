@@ -448,7 +448,7 @@ auto-collapsed when there isn't enough room."
   ;; (auto-side-windows-top-window-parameters '((mode-line-format . ...))) ;; Adjust mode-line
 
   ;; Maximum number of side windows on the left, top, right and bottom
-  (window-sides-slots '(1 1 1 1)) ; Example: Allow one window per side
+  (window-sides-slots '(1 1 1 2)) ; Example: Allow one window per side
 
   ;; Force left and right side windows to occupy full frame height
   (window-sides-vertical t)
