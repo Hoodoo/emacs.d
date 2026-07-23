@@ -94,5 +94,62 @@ while still being written, which can leave a partial final line."
         (forward-line 1)))
     (nreverse lines)))
 
+(defun claude-session-log--zero-usage ()
+  "Return a zeroed usage plist."
+  (list :input 0 :output 0 :cache-write-5m 0 :cache-write-1h 0 :cache-read 0))
+
+(defun claude-session-log--usage-plist-from-json (usage)
+  "Normalize a raw `message.usage' plist USAGE into this library's
+internal usage-plist shape. Prefers the split
+`cache_creation.ephemeral_5m_input_tokens' /
+`ephemeral_1h_input_tokens' fields when present, falling back to the
+combined `cache_creation_input_tokens' field (attributed to the
+5-minute rate) when the split object is absent."
+  (let ((cache-creation (plist-get usage :cache_creation))
+        (combined (or (plist-get usage :cache_creation_input_tokens) 0)))
+    (list :input (or (plist-get usage :input_tokens) 0)
+          :output (or (plist-get usage :output_tokens) 0)
+          :cache-write-5m (if cache-creation
+                               (or (plist-get cache-creation :ephemeral_5m_input_tokens) 0)
+                             combined)
+          :cache-write-1h (if cache-creation
+                               (or (plist-get cache-creation :ephemeral_1h_input_tokens) 0)
+                             0)
+          :cache-read (or (plist-get usage :cache_read_input_tokens) 0))))
+
+(defun claude-session-log--merge-usage (a b)
+  "Return a new usage plist summing usage plists A and B fieldwise."
+  (list :input (+ (plist-get a :input) (plist-get b :input))
+        :output (+ (plist-get a :output) (plist-get b :output))
+        :cache-write-5m (+ (plist-get a :cache-write-5m) (plist-get b :cache-write-5m))
+        :cache-write-1h (+ (plist-get a :cache-write-1h) (plist-get b :cache-write-1h))
+        :cache-read (+ (plist-get a :cache-read) (plist-get b :cache-read))))
+
+(defun claude-session-log--parse-timestamp (timestamp)
+  "Parse an ISO 8601 TIMESTAMP string into a Lisp time value, or nil."
+  (when timestamp
+    (encode-time (iso8601-parse timestamp))))
+
+(defun claude-session-log--seconds-between (start end)
+  "Return the number of seconds between ISO 8601 timestamps START and
+END, or nil if either is missing."
+  (when (and start end)
+    (float-time (time-subtract (claude-session-log--parse-timestamp end)
+                                (claude-session-log--parse-timestamp start)))))
+
+(defun claude-session-log--file-touches-in-content (content)
+  "Return `file_path' values from `Edit'/`Write'/`Read'/`NotebookEdit'
+`tool_use' blocks in CONTENT (a message's content-block list). CONTENT
+may also be a plain string (a user message with no blocks) or nil, in
+which case this returns nil."
+  (when (listp content)
+    (delq nil
+          (mapcar (lambda (block)
+                    (when (and (equal (plist-get block :type) "tool_use")
+                               (member (plist-get block :name)
+                                       claude-session-log-file-touching-tools))
+                      (plist-get (plist-get block :input) :file_path)))
+                  content))))
+
 (provide 'claude-session-log)
 ;;; claude-session-log.el ends here
