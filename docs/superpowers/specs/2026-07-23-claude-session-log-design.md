@@ -94,17 +94,24 @@ files:
                           ; revisit if that distinction turns out to matter.
   cwds branches           ; distinct sets of `cwd` / `gitBranch` values seen
                           ; across the session's own lines (not subagents')
-  task-list               ; latest task_reminder snapshot (list of plists
-                          ; :id :subject :description :status :blocks
-                          ; :blocked-by, plus :item-count), or nil if none
+  task-list               ; latest task_reminder snapshot: the raw parsed
+                          ; `attachment' plist verbatim (:type :itemCount
+                          ; :content, where :content is a list of plists
+                          ; using the raw JSON keys :id :subject
+                          ; :description :status :blocks :blockedBy), or
+                          ; nil if none. Not normalized to kebab-case --
+                          ; a deliberate simplification, consistent with
+                          ; this parser's "less presentation" scope.
   subagents               ; list of claude-session-log-subagent
   events)                 ; ordered list of lightweight per-line skeletons,
                           ; see "Retained per-event data" below
 
 (cl-defstruct claude-session-log-subagent
   agent-type description model spawn-depth tool-use-id
-  usage cost)              ; same shape as usage-by-model/cost-by-model,
-                          ; but for this subagent's own JSONL file
+  usage-by-model total-cost  ; same shape as the session's own fields
+  models files-touched)      ; merged into the session's own `models'/
+                          ; `files-touched' by the top-level entry point,
+                          ; per the "main + subagents" decision above
 ```
 
 ### Retained per-event data

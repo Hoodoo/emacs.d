@@ -253,6 +253,8 @@ verified real Claude Code JSONL line shapes.")
             (should (equal (cdr (assoc "claude-sonnet-5"
                                        (claude-session-log-subagent-usage-by-model sub)))
                            '(:input 5 :output 2 :cache-write-5m 0 :cache-write-1h 0 :cache-read 0)))
+            (should (equal (claude-session-log-subagent-models sub) '("claude-sonnet-5")))
+            (should (null (claude-session-log-subagent-files-touched sub)))
             (should (null (claude-session-log-subagent-total-cost sub)))))
       (delete-directory dir t))))
 
@@ -345,7 +347,9 @@ verified real Claude Code JSONL line shapes.")
           (let ((s (claude-session-log-parse-file source-path)))
             (should (equal (claude-session-log-session-session-id s) "291b7031-test"))
             (should (equal (claude-session-log-session-source-path s) source-path))
-            (should (equal (claude-session-log-session-models s) '("claude-sonnet-5")))
+            ;; models spans main + subagents: sonnet-5 from the main
+            ;; session, haiku-4-5 from the subagent.
+            (should (equal (claude-session-log-session-models s) '("claude-sonnet-5" "claude-haiku-4-5")))
             (should (equal (claude-session-log-session-files-touched s)
                            '("/home/hoooo/.emacs.d/init.el")))
             (should (equal (claude-session-log-session-cwds s) '("/home/hoooo/.emacs.d")))
@@ -369,6 +373,25 @@ verified real Claude Code JSONL line shapes.")
             ;; total-cost includes the subagent: $2.00 + $1.00 = $3.00.
             (should (= (claude-session-log-session-total-cost s) 3.00))
             (should (null (claude-session-log-session-unpriced-models s)))))
+      (delete-directory dir t))))
+
+(ert-deftest claude-session-log-test-parse-file-no-subagents ()
+  (let* ((dir (make-temp-file "claude-session-log-test" t))
+         (source-path (expand-file-name "no-subagents-test.jsonl" dir)))
+    (unwind-protect
+        (progn
+          (claude-session-log-test--write-jsonl
+           source-path
+           (list
+            (concat "{\"type\":\"assistant\",\"timestamp\":\"2026-07-21T10:00:00.000Z\","
+                    "\"message\":{\"role\":\"assistant\",\"model\":\"claude-sonnet-5\","
+                    "\"content\":[],\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}}")))
+          (let ((s (claude-session-log-parse-file source-path)))
+            (should (equal (claude-session-log-session-models s) '("claude-sonnet-5")))
+            (should (null (claude-session-log-session-subagents s)))
+            (should (> (cdr (assoc "claude-sonnet-5" (claude-session-log-session-cost-by-model s))) 0))
+            (should (= (claude-session-log-session-total-cost s)
+                       (cdr (assoc "claude-sonnet-5" (claude-session-log-session-cost-by-model s)))))))
       (delete-directory dir t))))
 
 (provide 'claude-session-log-test)

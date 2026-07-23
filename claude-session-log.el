@@ -33,7 +33,9 @@
 (cl-defstruct claude-session-log-subagent
   agent-type description model spawn-depth tool-use-id
   usage-by-model
-  total-cost)
+  total-cost
+  models
+  files-touched)
 
 (defconst claude-session-log-model-prices
   '(("claude-fable-5" . (10.00 . 50.00))
@@ -257,7 +259,9 @@ carrying a `spawnDepth' field."
      :model (plist-get meta :model)
      :spawn-depth (plist-get meta :spawnDepth)
      :tool-use-id (plist-get meta :toolUseId)
-     :usage-by-model (claude-session-log-session-usage-by-model parsed))))
+     :usage-by-model (claude-session-log-session-usage-by-model parsed)
+     :models (claude-session-log-session-models parsed)
+     :files-touched (claude-session-log-session-files-touched parsed))))
 
 (defun claude-session-log--cost-for-usage (usage prices)
   "Return the dollar cost of usage plist USAGE given PRICES = (input-price
@@ -321,13 +325,26 @@ SESSION."
 `claude-session-log-session' struct, including its subagents (if any,
 via a sibling `subagents/' directory) and computed per-model and total
 costs. This does one full synchronous parse of PATH -- call it again
-to see any lines appended since the last call."
+to see any lines appended since the last call. Subagent `models' and
+`files-touched' are merged into the session's own fields, since those
+two fields span main + subagents."
   (let* ((session-id (file-name-base path))
          (session (claude-session-log--parse-lines
                    session-id path (claude-session-log--read-jsonl-lines path)))
          (subagents (mapcar #'claude-session-log--parse-subagent
                              (claude-session-log--find-subagent-meta-files path))))
     (setf (claude-session-log-session-subagents session) subagents)
+    ;; models/files-touched span "main + subagents" per the design doc --
+    ;; merge each subagent's contribution in, deduped, main-session
+    ;; entries first (seq-uniq keeps first occurrence).
+    (setf (claude-session-log-session-models session)
+          (seq-uniq (append (claude-session-log-session-models session)
+                             (apply #'append (mapcar #'claude-session-log-subagent-models subagents)))
+                     #'equal))
+    (setf (claude-session-log-session-files-touched session)
+          (seq-uniq (append (claude-session-log-session-files-touched session)
+                             (apply #'append (mapcar #'claude-session-log-subagent-files-touched subagents)))
+                     #'equal))
     (claude-session-log--apply-costs session)))
 
 (provide 'claude-session-log)
