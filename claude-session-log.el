@@ -70,5 +70,29 @@ recording in a session's `files-touched' list.")
 Returns nil if MODEL has no entry in `claude-session-log-model-prices'."
   (cdr (assoc model claude-session-log-model-prices)))
 
+(defun claude-session-log--read-jsonl-lines (path)
+  "Read PATH as JSONL, returning an ordered list of parsed plists.
+Blank lines are skipped. A line that fails to parse as JSON is also
+skipped -- Claude Code's session files are append-only and can be read
+while still being written, which can leave a partial final line."
+  (let (lines)
+    (with-temp-buffer
+      (insert-file-contents path)
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let ((line (buffer-substring-no-properties
+                     (line-beginning-position) (line-end-position))))
+          (unless (string-blank-p line)
+            (let ((parsed (ignore-errors
+                            (json-parse-string
+                             line
+                             :object-type 'plist
+                             :array-type 'list
+                             :null-object nil
+                             :false-object nil))))
+              (when parsed (push parsed lines)))))
+        (forward-line 1)))
+    (nreverse lines)))
+
 (provide 'claude-session-log)
 ;;; claude-session-log.el ends here
