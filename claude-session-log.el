@@ -259,5 +259,61 @@ carrying a `spawnDepth' field."
      :tool-use-id (plist-get meta :toolUseId)
      :usage-by-model (claude-session-log-session-usage-by-model parsed))))
 
+(defun claude-session-log--cost-for-usage (usage prices)
+  "Return the dollar cost of usage plist USAGE given PRICES = (input-price
+. output-price), dollars per 1M tokens."
+  (let ((input-price (car prices))
+        (output-price (cdr prices)))
+    (+ (* (/ (plist-get usage :input) 1000000.0) input-price)
+       (* (/ (plist-get usage :output) 1000000.0) output-price)
+       (* (/ (plist-get usage :cache-write-5m) 1000000.0) input-price
+          claude-session-log-cache-write-5m-multiplier)
+       (* (/ (plist-get usage :cache-write-1h) 1000000.0) input-price
+          claude-session-log-cache-write-1h-multiplier)
+       (* (/ (plist-get usage :cache-read) 1000000.0) input-price
+          claude-session-log-cache-read-multiplier))))
+
+(defun claude-session-log--cost-for-usage-by-model (usage-by-model)
+  "Return (COST-BY-MODEL . UNPRICED-MODELS) for USAGE-BY-MODEL.
+COST-BY-MODEL is an alist of model -> dollars (float). UNPRICED-MODELS
+is the list of models present in USAGE-BY-MODEL with no
+`claude-session-log-model-prices' entry -- their usage still counts
+toward the totals, but contributes $0."
+  (let (cost-by-model unpriced)
+    (dolist (entry usage-by-model)
+      (let* ((model (car entry))
+             (usage (cdr entry))
+             (prices (claude-session-log--price-per-million model)))
+        (if prices
+            (push (cons model (claude-session-log--cost-for-usage usage prices))
+                  cost-by-model)
+          (progn (push model unpriced)
+                 (push (cons model 0.0) cost-by-model)))))
+    (cons (nreverse cost-by-model) (nreverse unpriced))))
+
+(defun claude-session-log--apply-costs (session)
+  "Fill SESSION's `cost-by-model', `total-cost', and `unpriced-models',
+folding every subagent's own cost into `total-cost' (this is \"real
+cost\": everything the session spent, including what it spawned).
+Also fills each subagent's own `total-cost'. Mutates and returns
+SESSION."
+  (let* ((result (claude-session-log--cost-for-usage-by-model
+                  (claude-session-log-session-usage-by-model session)))
+         (cost-by-model (car result))
+         (unpriced (cdr result))
+         (total (apply #'+ (mapcar #'cdr cost-by-model))))
+    (dolist (sub (claude-session-log-session-subagents session))
+      (let* ((sub-result (claude-session-log--cost-for-usage-by-model
+                          (claude-session-log-subagent-usage-by-model sub)))
+             (sub-cost-by-model (car sub-result))
+             (sub-total (apply #'+ (mapcar #'cdr sub-cost-by-model))))
+        (setf (claude-session-log-subagent-total-cost sub) sub-total)
+        (setq total (+ total sub-total))
+        (setq unpriced (append unpriced (cdr sub-result)))))
+    (setf (claude-session-log-session-cost-by-model session) cost-by-model)
+    (setf (claude-session-log-session-total-cost session) total)
+    (setf (claude-session-log-session-unpriced-models session) (delete-dups unpriced))
+    session))
+
 (provide 'claude-session-log)
 ;;; claude-session-log.el ends here

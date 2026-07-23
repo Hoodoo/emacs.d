@@ -256,5 +256,58 @@ verified real Claude Code JSONL line shapes.")
             (should (null (claude-session-log-subagent-total-cost sub)))))
       (delete-directory dir t))))
 
+(ert-deftest claude-session-log-test-cost-for-usage ()
+  ;; claude-sonnet-5: $2/$10 per 1M. 1000 input, 1000 output tokens.
+  ;; Plus 1000 cache-write-5m (x1.25), 1000 cache-write-1h (x2),
+  ;; 1000 cache-read (x0.1), all priced off the $2 input rate.
+  (let ((usage '(:input 1000 :output 1000 :cache-write-5m 1000
+                 :cache-write-1h 1000 :cache-read 1000))
+        (prices '(2.00 . 10.00)))
+    (should (= (claude-session-log--cost-for-usage usage prices)
+               (+ (* (/ 1000 1000000.0) 2.00)
+                  (* (/ 1000 1000000.0) 10.00)
+                  (* (/ 1000 1000000.0) 2.00 1.25)
+                  (* (/ 1000 1000000.0) 2.00 2.0)
+                  (* (/ 1000 1000000.0) 2.00 0.1))))))
+
+(ert-deftest claude-session-log-test-cost-for-usage-by-model-unpriced ()
+  (let* ((usage-by-model
+          (list (cons "claude-sonnet-5"
+                      '(:input 1000000 :output 1000000 :cache-write-5m 0
+                        :cache-write-1h 0 :cache-read 0))
+                (cons "some-future-model"
+                      '(:input 1000000 :output 0 :cache-write-5m 0
+                        :cache-write-1h 0 :cache-read 0))))
+         (result (claude-session-log--cost-for-usage-by-model usage-by-model))
+         (cost-by-model (car result))
+         (unpriced (cdr result)))
+    (should (= (cdr (assoc "claude-sonnet-5" cost-by-model)) 12.00))
+    (should (= (cdr (assoc "some-future-model" cost-by-model)) 0.0))
+    (should (equal unpriced '("some-future-model")))))
+
+(ert-deftest claude-session-log-test-apply-costs-folds-subagents ()
+  (let* ((session (make-claude-session-log-session
+                   :usage-by-model
+                   (list (cons "claude-sonnet-5"
+                               '(:input 1000000 :output 0 :cache-write-5m 0
+                                 :cache-write-1h 0 :cache-read 0)))
+                   :subagents
+                   (list (make-claude-session-log-subagent
+                          :model "claude-haiku-4-5"
+                          :usage-by-model
+                          (list (cons "claude-haiku-4-5"
+                                      '(:input 1000000 :output 0 :cache-write-5m 0
+                                        :cache-write-1h 0 :cache-read 0)))))))
+         (result (claude-session-log--apply-costs session)))
+    (should (eq result session))
+    (should (= (cdr (assoc "claude-sonnet-5" (claude-session-log-session-cost-by-model session)))
+               2.00))
+    (should (= (claude-session-log-subagent-total-cost
+                (car (claude-session-log-session-subagents session)))
+               1.00))
+    ;; total-cost is the session's own cost PLUS the subagent's.
+    (should (= (claude-session-log-session-total-cost session) 3.00))
+    (should (null (claude-session-log-session-unpriced-models session)))))
+
 (provide 'claude-session-log-test)
 ;;; claude-session-log-test.el ends here
