@@ -210,5 +210,51 @@ verified real Claude Code JSONL line shapes.")
     (should (null (claude-session-log-session-unpriced-models s)))
     (should (null (claude-session-log-session-subagents s)))))
 
+(defun claude-session-log-test--write-jsonl (path lines)
+  "Write LINES (a list of JSON strings) to PATH, one per line."
+  (with-temp-file path
+    (dolist (line lines) (insert line "\n"))))
+
+(ert-deftest claude-session-log-test-find-subagent-meta-files-none ()
+  (let* ((dir (make-temp-file "claude-session-log-test" t))
+         (source-path (expand-file-name "sess.jsonl" dir)))
+    (unwind-protect
+        (progn
+          (claude-session-log-test--write-jsonl source-path '("{\"type\":\"user\"}"))
+          (should (null (claude-session-log--find-subagent-meta-files source-path))))
+      (delete-directory dir t))))
+
+(ert-deftest claude-session-log-test-find-and-parse-subagent ()
+  (let* ((dir (make-temp-file "claude-session-log-test" t))
+         (source-path (expand-file-name "sess.jsonl" dir))
+         (subagents-dir (expand-file-name "subagents" (file-name-sans-extension source-path)))
+         (meta-path (expand-file-name "agent-1.meta.json" subagents-dir))
+         (agent-jsonl-path (expand-file-name "agent-1.jsonl" subagents-dir)))
+    (unwind-protect
+        (progn
+          (make-directory subagents-dir t)
+          (claude-session-log-test--write-jsonl source-path '("{\"type\":\"user\"}"))
+          (with-temp-file meta-path
+            (insert "{\"agentType\":\"general-purpose\",\"description\":\"Review Task 1\","
+                    "\"toolUseId\":\"toolu_01ABC\",\"spawnDepth\":1,\"model\":\"sonnet\"}"))
+          (claude-session-log-test--write-jsonl
+           agent-jsonl-path
+           (list (concat "{\"type\":\"assistant\",\"timestamp\":\"2026-07-21T10:00:00.000Z\","
+                         "\"message\":{\"role\":\"assistant\",\"model\":\"claude-sonnet-5\","
+                         "\"content\":[],\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}}")))
+          (let ((found (claude-session-log--find-subagent-meta-files source-path)))
+            (should (equal found (list meta-path))))
+          (let ((sub (claude-session-log--parse-subagent meta-path)))
+            (should (equal (claude-session-log-subagent-agent-type sub) "general-purpose"))
+            (should (equal (claude-session-log-subagent-description sub) "Review Task 1"))
+            (should (equal (claude-session-log-subagent-tool-use-id sub) "toolu_01ABC"))
+            (should (equal (claude-session-log-subagent-spawn-depth sub) 1))
+            (should (equal (claude-session-log-subagent-model sub) "sonnet"))
+            (should (equal (cdr (assoc "claude-sonnet-5"
+                                       (claude-session-log-subagent-usage-by-model sub)))
+                           '(:input 5 :output 2 :cache-write-5m 0 :cache-write-1h 0 :cache-read 0)))
+            (should (null (claude-session-log-subagent-total-cost sub)))))
+      (delete-directory dir t))))
+
 (provide 'claude-session-log-test)
 ;;; claude-session-log-test.el ends here

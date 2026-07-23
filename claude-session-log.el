@@ -218,5 +218,46 @@ in separately (see `claude-session-log--apply-costs' and
      :task-list task-list
      :events (nreverse events))))
 
+(defun claude-session-log--read-json-file (path)
+  "Read and parse the single JSON object in PATH."
+  (with-temp-buffer
+    (insert-file-contents path)
+    (json-parse-string (buffer-string)
+                        :object-type 'plist :array-type 'list
+                        :null-object nil :false-object nil)))
+
+(defun claude-session-log--find-subagent-meta-files (source-path)
+  "Return the list of `.meta.json' paths in SOURCE-PATH's sibling
+`subagents/' directory (same basename as SOURCE-PATH, minus its
+extension), or nil if that directory doesn't exist. This is a flat,
+single-level listing -- verified against real session data, subagent
+directories are not recursively nested despite subagent metadata
+carrying a `spawnDepth' field."
+  (let ((dir (expand-file-name "subagents" (file-name-sans-extension source-path))))
+    (when (file-directory-p dir)
+      (directory-files dir t "\\.meta\\.json\\'"))))
+
+(defun claude-session-log--parse-subagent (meta-path)
+  "Parse a subagent's META-PATH (\"agent-X.meta.json\") and its sibling
+\"agent-X.jsonl\" into a `claude-session-log-subagent' struct.
+`total-cost' is left nil -- see `claude-session-log--apply-costs'."
+  (let* ((meta (claude-session-log--read-json-file meta-path))
+         ;; Strip both ".json" and ".meta" to get "agent-X", then add
+         ;; ".jsonl" -- matches this dir's real naming convention.
+         (jsonl-path (concat (file-name-sans-extension
+                               (file-name-sans-extension meta-path))
+                              ".jsonl"))
+         (agent-id (file-name-base jsonl-path))
+         (parsed (claude-session-log--parse-lines
+                  agent-id jsonl-path
+                  (claude-session-log--read-jsonl-lines jsonl-path))))
+    (make-claude-session-log-subagent
+     :agent-type (plist-get meta :agentType)
+     :description (plist-get meta :description)
+     :model (plist-get meta :model)
+     :spawn-depth (plist-get meta :spawnDepth)
+     :tool-use-id (plist-get meta :toolUseId)
+     :usage-by-model (claude-session-log-session-usage-by-model parsed))))
+
 (provide 'claude-session-log)
 ;;; claude-session-log.el ends here
