@@ -315,5 +315,20 @@ SESSION."
     (setf (claude-session-log-session-unpriced-models session) (delete-dups unpriced))
     session))
 
+;;;###autoload
+(defun claude-session-log-parse-file (path)
+  "Parse the Claude Code session JSONL file at PATH into a
+`claude-session-log-session' struct, including its subagents (if any,
+via a sibling `subagents/' directory) and computed per-model and total
+costs. This does one full synchronous parse of PATH -- call it again
+to see any lines appended since the last call."
+  (let* ((session-id (file-name-base path))
+         (session (claude-session-log--parse-lines
+                   session-id path (claude-session-log--read-jsonl-lines path)))
+         (subagents (mapcar #'claude-session-log--parse-subagent
+                             (claude-session-log--find-subagent-meta-files path))))
+    (setf (claude-session-log-session-subagents session) subagents)
+    (claude-session-log--apply-costs session)))
+
 (provide 'claude-session-log)
 ;;; claude-session-log.el ends here

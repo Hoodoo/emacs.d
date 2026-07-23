@@ -309,5 +309,67 @@ verified real Claude Code JSONL line shapes.")
     (should (= (claude-session-log-session-total-cost session) 3.00))
     (should (null (claude-session-log-session-unpriced-models session)))))
 
+(ert-deftest claude-session-log-test-parse-file-end-to-end ()
+  (let* ((dir (make-temp-file "claude-session-log-test" t))
+         (source-path (expand-file-name "291b7031-test.jsonl" dir))
+         (subagents-dir (expand-file-name "subagents" (file-name-sans-extension source-path)))
+         (meta-path (expand-file-name "agent-1.meta.json" subagents-dir))
+         (agent-jsonl-path (expand-file-name "agent-1.jsonl" subagents-dir)))
+    (unwind-protect
+        (progn
+          (make-directory subagents-dir t)
+          (claude-session-log-test--write-jsonl
+           source-path
+           (list
+            (concat "{\"type\":\"user\",\"timestamp\":\"2026-07-21T10:00:00.000Z\","
+                    "\"cwd\":\"/home/hoooo/.emacs.d\",\"gitBranch\":\"main\","
+                    "\"message\":{\"role\":\"user\",\"content\":\"go\"}}")
+            (concat "{\"type\":\"assistant\",\"timestamp\":\"2026-07-21T10:00:05.000Z\","
+                    "\"cwd\":\"/home/hoooo/.emacs.d\",\"gitBranch\":\"main\","
+                    "\"message\":{\"role\":\"assistant\",\"model\":\"claude-sonnet-5\","
+                    "\"content\":[{\"type\":\"tool_use\",\"id\":\"tu1\",\"name\":\"Edit\","
+                    "\"input\":{\"file_path\":\"/home/hoooo/.emacs.d/init.el\"}}],"
+                    "\"usage\":{\"input_tokens\":1000000,\"output_tokens\":0}}}")
+            (concat "{\"type\":\"attachment\",\"timestamp\":\"2026-07-21T10:00:06.000Z\","
+                    "\"attachment\":{\"type\":\"task_reminder\",\"itemCount\":1,"
+                    "\"content\":[{\"id\":\"1\",\"subject\":\"T1\",\"description\":\"d\","
+                    "\"status\":\"pending\",\"blocks\":[],\"blockedBy\":[]}]}}")))
+          (with-temp-file meta-path
+            (insert "{\"agentType\":\"general-purpose\",\"description\":\"help\","
+                    "\"toolUseId\":\"toolu_1\",\"spawnDepth\":1,\"model\":\"haiku\"}"))
+          (claude-session-log-test--write-jsonl
+           agent-jsonl-path
+           (list (concat "{\"type\":\"assistant\",\"timestamp\":\"2026-07-21T10:00:02.000Z\","
+                         "\"message\":{\"role\":\"assistant\",\"model\":\"claude-haiku-4-5\","
+                         "\"content\":[],\"usage\":{\"input_tokens\":1000000,\"output_tokens\":0}}}")))
+          (let ((s (claude-session-log-parse-file source-path)))
+            (should (equal (claude-session-log-session-session-id s) "291b7031-test"))
+            (should (equal (claude-session-log-session-source-path s) source-path))
+            (should (equal (claude-session-log-session-models s) '("claude-sonnet-5")))
+            (should (equal (claude-session-log-session-files-touched s)
+                           '("/home/hoooo/.emacs.d/init.el")))
+            (should (equal (claude-session-log-session-cwds s) '("/home/hoooo/.emacs.d")))
+            (should (equal (claude-session-log-session-branches s) '("main")))
+            (should (equal (plist-get (car (plist-get
+                                             (claude-session-log-session-task-list s)
+                                             :content))
+                                       :status)
+                           "pending"))
+            (should (= (length (claude-session-log-session-subagents s)) 1))
+            (should (equal (claude-session-log-subagent-agent-type
+                            (car (claude-session-log-session-subagents s)))
+                           "general-purpose"))
+            ;; claude-sonnet-5: $2/1M input * 1M tokens = $2.00 (own cost).
+            (should (= (cdr (assoc "claude-sonnet-5" (claude-session-log-session-cost-by-model s)))
+                       2.00))
+            ;; claude-haiku-4-5: $1/1M input * 1M tokens = $1.00 (subagent).
+            (should (= (claude-session-log-subagent-total-cost
+                        (car (claude-session-log-session-subagents s)))
+                       1.00))
+            ;; total-cost includes the subagent: $2.00 + $1.00 = $3.00.
+            (should (= (claude-session-log-session-total-cost s) 3.00))
+            (should (null (claude-session-log-session-unpriced-models s)))))
+      (delete-directory dir t))))
+
 (provide 'claude-session-log-test)
 ;;; claude-session-log-test.el ends here
