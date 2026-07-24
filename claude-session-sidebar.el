@@ -14,6 +14,7 @@
 (require 'seq)
 (require 'claude-session-log)
 (require 'vui)
+(require 'vui-components)
 
 (declare-function claude-session-sidebar-close "claude-session-sidebar")
 (declare-function claude-session-sidebar-refresh "claude-session-sidebar")
@@ -207,6 +208,55 @@ Returns one of:
       ('shown (claude-session-sidebar--render-stats session))
       ('error (vui-muted (format "Unavailable: %s" (plist-get result :error))))
       (_ (vui-muted "Loading…")))))
+
+(vui-defcomponent claude-session-sidebar-root (path)
+  "Root sidebar component: no-session message, or every registered
+widget in `:order', each passed PATH."
+  :render
+  (if (null path)
+      (vui-muted "No Claude Code session at point.")
+    (apply #'vui-vstack
+           (mapcar (lambda (entry)
+                     (vui-component (plist-get (cdr entry) :component) :path path))
+                   (claude-session-sidebar--ordered-widgets)))))
+
+(defvar claude-session-sidebar--instances (make-hash-table :test 'eq)
+  "Hash table of frame -> `vui-instance' for the sidebar root component.")
+
+(defvar claude-session-sidebar--rendering nil
+  "Non-nil while the sidebar is rendering. Guards against hook re-entry.")
+
+(defvar-local claude-session-sidebar--current-path nil
+  "The session path currently rendered in this sidebar buffer.")
+
+(defun claude-session-sidebar--render-sidebar (path &optional frame)
+  "Render PATH into FRAME's sidebar, reusing its `vui-instance' if live.
+Ported from `vulpea-ui--render-sidebar': selects the sidebar window
+before mounting (since `vui-mount' ends with `switch-to-buffer'), then
+restores the originally-selected window."
+  (let* ((claude-session-sidebar--rendering t)
+         (frame (or frame (selected-frame)))
+         (sidebar-win (claude-session-sidebar--get-sidebar-window frame)))
+    (when (window-live-p sidebar-win)
+      (let* ((buf-name (claude-session-sidebar--sidebar-buffer-name frame))
+             (buf (get-buffer-create buf-name))
+             (original-window (selected-window))
+             (existing-instance (gethash frame claude-session-sidebar--instances)))
+        (select-window sidebar-win t)
+        (with-current-buffer buf
+          (if (and existing-instance
+                   (vui-instance-buffer existing-instance)
+                   (buffer-live-p (vui-instance-buffer existing-instance)))
+              (vui-update-props existing-instance (list :path path))
+            (let ((new-instance
+                   (vui-mount
+                    (vui-component 'claude-session-sidebar-root :path path)
+                    buf-name)))
+              (puthash frame new-instance claude-session-sidebar--instances)))
+          (setq claude-session-sidebar--current-path path)
+          (goto-char (point-min)))
+        (when (window-live-p original-window)
+          (select-window original-window t))))))
 
 (defun claude-session-sidebar--get-main-window (&optional frame)
   "Get the most recently used main window in FRAME.

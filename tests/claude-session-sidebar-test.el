@@ -264,5 +264,56 @@ regression this pattern already guards against in vulpea-ui (vulpea-journal#21).
               (kill-buffer (vui-instance-buffer instance)))))
       (delete-directory dir t))))
 
+(ert-deftest claude-session-sidebar-test-root-no-session ()
+  (let ((instance (vui-mount (vui-component 'claude-session-sidebar-root :path nil)
+                              "*claude-session-sidebar-root-test-1*")))
+    (unwind-protect
+        (with-current-buffer (vui-instance-buffer instance)
+          (should (string-match-p "No Claude Code session" (buffer-string))))
+      (kill-buffer (vui-instance-buffer instance)))))
+
+(ert-deftest claude-session-sidebar-test-root-renders-registered-widgets ()
+  (let ((claude-session-sidebar--widgets nil)
+        (dir (make-temp-file "claude-session-sidebar-test" t)))
+    (unwind-protect
+        (let ((path (expand-file-name "sess.jsonl" dir)))
+          (with-temp-file path
+            (insert (concat "{\"type\":\"assistant\",\"timestamp\":\"2026-07-21T10:00:00.000Z\","
+                            "\"message\":{\"role\":\"assistant\",\"model\":\"claude-sonnet-5\","
+                            "\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n")))
+          (claude-session-sidebar-register-widget
+           'stats :component 'claude-session-sidebar-widget-stats :order 10)
+          (let ((instance (vui-mount (vui-component 'claude-session-sidebar-root :path path)
+                                      "*claude-session-sidebar-root-test-2*")))
+            (unwind-protect
+                (with-current-buffer (vui-instance-buffer instance)
+                  (should (string-match-p "claude-sonnet-5" (buffer-string))))
+              (kill-buffer (vui-instance-buffer instance)))))
+      (delete-directory dir t))))
+
+(ert-deftest claude-session-sidebar-test-render-sidebar-without-window-is-noop ()
+  "No live sidebar window means no error, no instance created --
+mirrors vulpea-ui-test-render-sidebar-without-window-is-noop."
+  (save-window-excursion
+    (let ((claude-session-sidebar--instances (make-hash-table :test 'eq)))
+      (claude-session-sidebar--render-sidebar "/some/path.jsonl")
+      (should (zerop (hash-table-count claude-session-sidebar--instances))))))
+
+(ert-deftest claude-session-sidebar-test-render-sidebar-restores-original-window ()
+  (save-window-excursion
+    (let* ((claude-session-sidebar--instances (make-hash-table :test 'eq))
+           (main-buf (generate-new-buffer "main"))
+           (sidebar-buf (get-buffer-create (claude-session-sidebar--sidebar-buffer-name)))
+           (sidebar-win (display-buffer-in-side-window
+                         sidebar-buf '((side . right) (slot . 0)))))
+      (unwind-protect
+          (progn
+            (switch-to-buffer main-buf)
+            (let ((original-window (selected-window)))
+              (claude-session-sidebar--render-sidebar nil)
+              (should (eq (selected-window) original-window))))
+        (when (window-live-p sidebar-win) (ignore-errors (delete-window sidebar-win)))
+        (mapc #'kill-buffer (list main-buf sidebar-buf))))))
+
 (provide 'claude-session-sidebar-test)
 ;;; claude-session-sidebar-test.el ends here
