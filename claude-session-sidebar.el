@@ -137,6 +137,77 @@ Registering under an existing ID replaces its entry."
         (lambda (a b) (< (or (plist-get (cdr a) :order) 0)
                           (or (plist-get (cdr b) :order) 0)))))
 
+(defun claude-session-sidebar--aggregate-tokens (session)
+  "Return (INPUT . OUTPUT) token totals summed across every model in SESSION."
+  (let ((input 0) (output 0))
+    (dolist (entry (claude-session-log-session-usage-by-model session))
+      (setq input (+ input (plist-get (cdr entry) :input)))
+      (setq output (+ output (plist-get (cdr entry) :output))))
+    (cons input output)))
+
+(defun claude-session-sidebar--render-stats (session)
+  "Render SESSION (a `claude-session-log-session') as a stats vnode."
+  (let ((tokens (claude-session-sidebar--aggregate-tokens session)))
+    (vui-vstack
+     (vui-text (format "Models: %s"
+                       (string-join (claude-session-log-session-models session) ", "))
+       :face 'bold)
+     (vui-text (format "Duration: %.0fs"
+                       (or (claude-session-log-session-duration-seconds session) 0)))
+     (vui-text (format "Tokens: %d in / %d out" (car tokens) (cdr tokens)))
+     (vui-text (format "Total cost: $%.4f"
+                       (or (claude-session-log-session-total-cost session) 0.0))))))
+
+(defun claude-session-sidebar--stats-display-data (status path fresh last-ref)
+  "Decide which session struct to render and keep LAST-REF in sync.
+
+STATUS is the `vui-use-async' status for PATH. FRESH is the freshly
+loaded `claude-session-log-session', meaningful when STATUS is `ready'.
+LAST-REF is a ref (see `vui-use-ref') holding (PATH . SESSION) from the
+previous successful load. Mirrors `vulpea-ui--mentions-display-data'.
+
+Returns one of:
+  (shown . SESSION)  render SESSION -- fresh on `ready', or the cached
+                     struct for the same PATH while pending/errored, so
+                     the sidebar doesn't blank out on a transient hiccup;
+  (error)            render the error state (nothing cached for PATH);
+  (loading)          render the loading state (nothing cached for PATH)."
+  (pcase status
+    ('ready (setcar last-ref (cons path fresh)) (cons 'shown fresh))
+    ('error
+     (let ((prev (car last-ref)))
+       (if (and prev (equal (car prev) path))
+           (cons 'shown (cdr prev))
+         (cons 'error nil))))
+    (_ (let ((prev (car last-ref)))
+         (if (and prev (equal (car prev) path))
+             (cons 'shown (cdr prev))
+           (cons 'loading nil))))))
+
+(defun claude-session-sidebar--file-mtime (path)
+  "Return PATH's modification time, or nil if it doesn't exist."
+  (file-attribute-modification-time (file-attributes path)))
+
+(vui-defcomponent claude-session-sidebar-widget-stats (path)
+  "Stats widget: models, duration, token totals, total cost for PATH."
+  :render
+  (let* ((last-ref (vui-use-ref nil))
+         (mtime (claude-session-sidebar--file-mtime path))
+         (result (vui-use-async (list path mtime)
+                   (lambda (resolve reject)
+                     (condition-case err
+                         (funcall resolve (claude-session-log-parse-file path))
+                       (error (funcall reject (error-message-string err)))))))
+         (status (plist-get result :status))
+         (decision (claude-session-sidebar--stats-display-data
+                    status path (plist-get result :data) last-ref))
+         (state (car decision))
+         (session (cdr decision)))
+    (pcase state
+      ('shown (claude-session-sidebar--render-stats session))
+      ('error (vui-muted (format "Unavailable: %s" (plist-get result :error))))
+      (_ (vui-muted "Loading…")))))
+
 (defun claude-session-sidebar--get-main-window (&optional frame)
   "Get the most recently used main window in FRAME.
 A main window is a live, non-minibuffer window that is neither this

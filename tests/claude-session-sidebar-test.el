@@ -199,5 +199,70 @@ regression this pattern already guards against in vulpea-ui (vulpea-journal#21).
     (should (equal (plist-get (cdr (assq 'a claude-session-sidebar--widgets)) :component)
                    'widget-a-v2))))
 
+(ert-deftest claude-session-sidebar-test-aggregate-tokens ()
+  (let ((session (make-claude-session-log-session
+                  :usage-by-model
+                  (list (cons "claude-sonnet-5" '(:input 100 :output 50 :cache-write-5m 0
+                                                  :cache-write-1h 0 :cache-read 0))
+                        (cons "claude-haiku-4-5" '(:input 10 :output 5 :cache-write-5m 0
+                                                   :cache-write-1h 0 :cache-read 0))))))
+    (should (equal (claude-session-sidebar--aggregate-tokens session) '(110 . 55)))))
+
+;; NOTE: these four tests build LAST-REF as a plain `(cons nil nil)',
+;; NOT via `(vui-use-ref nil)'. `vui-use-ref' signals "called outside
+;; of component context" unless called from inside an active
+;; component render (verified against vui.el's source:
+;; `vui--get-or-create-ref' checks `vui--current-instance' and errors
+;; if nil) -- these are unit tests of the pure decision helper, not of
+;; the component, so they construct the cons cell `vui-use-ref' would
+;; have handed back rather than going through vui's render machinery.
+;; The real component (this task's `vui-defcomponent', tested by
+;; `claude-session-sidebar-test-widget-stats-renders-real-session'
+;; below via `vui-mount') does call the real `vui-use-ref'.
+
+(ert-deftest claude-session-sidebar-test-stats-display-data-ready ()
+  (let* ((last-ref (cons nil nil))
+         (fresh (make-claude-session-log-session :session-id "s1"))
+         (decision (claude-session-sidebar--stats-display-data 'ready "path1" fresh last-ref)))
+    (should (eq (car decision) 'shown))
+    (should (eq (cdr decision) fresh))
+    (should (equal (car last-ref) (cons "path1" fresh)))))
+
+(ert-deftest claude-session-sidebar-test-stats-display-data-error-with-cache ()
+  (let* ((last-ref (cons nil nil))
+         (fresh (make-claude-session-log-session :session-id "s1")))
+    (claude-session-sidebar--stats-display-data 'ready "path1" fresh last-ref)
+    (let ((decision (claude-session-sidebar--stats-display-data 'error "path1" nil last-ref)))
+      (should (eq (car decision) 'shown))
+      (should (eq (cdr decision) fresh)))))
+
+(ert-deftest claude-session-sidebar-test-stats-display-data-error-no-cache ()
+  (let* ((last-ref (cons nil nil))
+         (decision (claude-session-sidebar--stats-display-data 'error "path1" nil last-ref)))
+    (should (eq (car decision) 'error))))
+
+(ert-deftest claude-session-sidebar-test-stats-display-data-pending-no-cache ()
+  (let* ((last-ref (cons nil nil))
+         (decision (claude-session-sidebar--stats-display-data 'pending "path1" nil last-ref)))
+    (should (eq (car decision) 'loading))))
+
+(ert-deftest claude-session-sidebar-test-widget-stats-renders-real-session ()
+  (let* ((dir (make-temp-file "claude-session-sidebar-test" t))
+         (path (expand-file-name "sess.jsonl" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (insert (concat "{\"type\":\"assistant\",\"timestamp\":\"2026-07-21T10:00:00.000Z\","
+                            "\"message\":{\"role\":\"assistant\",\"model\":\"claude-sonnet-5\","
+                            "\"content\":[],\"usage\":{\"input_tokens\":100,\"output_tokens\":50}}}\n")))
+          (let ((instance (vui-mount (vui-component 'claude-session-sidebar-widget-stats :path path)
+                                      "*claude-session-sidebar-widget-test*")))
+            (unwind-protect
+                (with-current-buffer (vui-instance-buffer instance)
+                  (should (string-match-p "claude-sonnet-5" (buffer-string)))
+                  (should (string-match-p "100" (buffer-string))))
+              (kill-buffer (vui-instance-buffer instance)))))
+      (delete-directory dir t))))
+
 (provide 'claude-session-sidebar-test)
 ;;; claude-session-sidebar-test.el ends here
