@@ -692,8 +692,20 @@ Append to `tests/claude-session-sidebar-test.el`:
                                                    :cache-write-1h 0 :cache-read 0))))))
     (should (equal (claude-session-sidebar--aggregate-tokens session) '(110 . 55)))))
 
+;; NOTE: these four tests build LAST-REF as a plain `(cons nil nil)',
+;; NOT via `(vui-use-ref nil)'. `vui-use-ref' signals "called outside
+;; of component context" unless called from inside an active
+;; component render (verified against vui.el's source:
+;; `vui--get-or-create-ref' checks `vui--current-instance' and errors
+;; if nil) -- these are unit tests of the pure decision helper, not of
+;; the component, so they construct the cons cell `vui-use-ref' would
+;; have handed back rather than going through vui's render machinery.
+;; The real component (this task's `vui-defcomponent', tested by
+;; `claude-session-sidebar-test-widget-stats-renders-real-session'
+;; below via `vui-mount') does call the real `vui-use-ref'.
+
 (ert-deftest claude-session-sidebar-test-stats-display-data-ready ()
-  (let* ((last-ref (vui-use-ref nil))
+  (let* ((last-ref (cons nil nil))
          (fresh (make-claude-session-log-session :session-id "s1"))
          (decision (claude-session-sidebar--stats-display-data 'ready "path1" fresh last-ref)))
     (should (eq (car decision) 'shown))
@@ -701,7 +713,7 @@ Append to `tests/claude-session-sidebar-test.el`:
     (should (equal (car last-ref) (cons "path1" fresh)))))
 
 (ert-deftest claude-session-sidebar-test-stats-display-data-error-with-cache ()
-  (let* ((last-ref (vui-use-ref nil))
+  (let* ((last-ref (cons nil nil))
          (fresh (make-claude-session-log-session :session-id "s1")))
     (claude-session-sidebar--stats-display-data 'ready "path1" fresh last-ref)
     (let ((decision (claude-session-sidebar--stats-display-data 'error "path1" nil last-ref)))
@@ -709,12 +721,12 @@ Append to `tests/claude-session-sidebar-test.el`:
       (should (eq (cdr decision) fresh)))))
 
 (ert-deftest claude-session-sidebar-test-stats-display-data-error-no-cache ()
-  (let* ((last-ref (vui-use-ref nil))
+  (let* ((last-ref (cons nil nil))
          (decision (claude-session-sidebar--stats-display-data 'error "path1" nil last-ref)))
     (should (eq (car decision) 'error))))
 
 (ert-deftest claude-session-sidebar-test-stats-display-data-pending-no-cache ()
-  (let* ((last-ref (vui-use-ref nil))
+  (let* ((last-ref (cons nil nil))
          (decision (claude-session-sidebar--stats-display-data 'pending "path1" nil last-ref)))
     (should (eq (car decision) 'loading))))
 
