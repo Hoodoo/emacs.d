@@ -13,6 +13,10 @@
 (require 'map)
 (require 'seq)
 (require 'claude-session-log)
+(require 'vui)
+
+(declare-function claude-session-sidebar-close "claude-session-sidebar")
+(declare-function claude-session-sidebar-refresh "claude-session-sidebar")
 
 ;; Forward declarations so this file loads standalone (e.g. under test,
 ;; without the real `agent-shell' package present), mirroring the same
@@ -22,11 +26,96 @@
 (unless (boundp 'agent-shell-mode)
   (defvar agent-shell-mode nil))
 
-;; Task 2 will replace this stub with the real sidebar-window lookup.
-;; A nil return is indistinguishable from "no sidebar exists yet", which
-;; is correct for this task.
-(defun claude-session-sidebar--get-sidebar-window (&optional _frame)
-  nil)
+(defcustom claude-session-sidebar-position 'right
+  "Position of the sidebar in the frame.
+One of `left', `right', `top', or `bottom'."
+  :type '(choice (const :tag "Left" left)
+          (const :tag "Right" right)
+          (const :tag "Top" top)
+          (const :tag "Bottom" bottom))
+  :group 'claude-session-sidebar)
+
+(defcustom claude-session-sidebar-size 0.33
+  "Size of the sidebar window (width if left/right, height if top/bottom)."
+  :type 'number
+  :group 'claude-session-sidebar)
+
+(defun claude-session-sidebar--sidebar-buffer-name (&optional frame)
+  "Return the sidebar buffer name for FRAME."
+  (let ((frame (or frame (selected-frame))))
+    (format "*claude-session-sidebar:%s*" (or (frame-parameter frame 'window-id) ""))))
+
+(defun claude-session-sidebar--get-sidebar-buffer (&optional frame)
+  "Get the sidebar buffer for FRAME, or nil if it doesn't exist."
+  (get-buffer (claude-session-sidebar--sidebar-buffer-name frame)))
+
+(defun claude-session-sidebar--get-sidebar-window (&optional frame)
+  "Get the sidebar window for FRAME, or nil if it doesn't exist."
+  (let ((buf (claude-session-sidebar--get-sidebar-buffer frame)))
+    (when buf (get-buffer-window buf frame))))
+
+(defun claude-session-sidebar--sidebar-visible-p (&optional frame)
+  "Return non-nil if the sidebar is visible in FRAME."
+  (claude-session-sidebar--get-sidebar-window frame))
+
+(defun claude-session-sidebar--display-buffer-params ()
+  "Return `display-buffer' parameters for the sidebar."
+  (let ((side claude-session-sidebar-position)
+        (size claude-session-sidebar-size))
+    `((side . ,side)
+      (slot . 0)
+      (window-width . ,(if (memq side '(left right)) size nil))
+      (window-height . ,(if (memq side '(top bottom)) size nil))
+      (window-parameters . ((no-delete-other-windows . t)
+                            (dedicated . t)
+                            (no-other-window . nil))))))
+
+(defun claude-session-sidebar--ensure-side-slot (slots side)
+  "Return SLOTS with SIDE guaranteed at least one available slot.
+Ported from `vulpea-ui--ensure-side-slot'."
+  (let ((idx (pcase side
+               ('left 0) ('top 1) ('right 2) ('bottom 3)
+               (_ (error "Invalid side: %S" side))))
+        (slots (copy-sequence slots)))
+    (let ((cur (nth idx slots)))
+      (when (and (numberp cur) (< cur 1))
+        (setf (nth idx slots) 1)))
+    slots))
+
+(defun claude-session-sidebar--create-sidebar-window (buffer)
+  "Create a sidebar window for BUFFER using side window mechanics.
+Ported from `vulpea-ui--create-sidebar-window'."
+  (let ((window-sides-slots
+         (claude-session-sidebar--ensure-side-slot
+          window-sides-slots claude-session-sidebar-position)))
+    (display-buffer-in-side-window buffer (claude-session-sidebar--display-buffer-params))))
+
+(defun claude-session-sidebar--hide-sidebar-window (&optional frame)
+  "Hide the sidebar window in FRAME without killing the buffer.
+Only an actual side window is deleted, mirroring
+`vulpea-ui--hide-sidebar-window'."
+  (let ((win (claude-session-sidebar--get-sidebar-window frame)))
+    (when (and (window-live-p win) (window-parameter win 'window-side))
+      (delete-window win))))
+
+(defun claude-session-sidebar--show-sidebar-window (&optional frame)
+  "Show the sidebar window in FRAME."
+  (let ((buf (claude-session-sidebar--get-sidebar-buffer frame)))
+    (when (and buf (not (claude-session-sidebar--sidebar-visible-p frame)))
+      (claude-session-sidebar--create-sidebar-window buf))))
+
+(defvar claude-session-sidebar-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "q") #'claude-session-sidebar-close)
+    (define-key map (kbd "g") #'claude-session-sidebar-refresh)
+    map)
+  "Keymap for `claude-session-sidebar-mode'.")
+
+(define-derived-mode claude-session-sidebar-mode vui-mode "claude-session-sidebar"
+  "Major mode for the claude-session-sidebar buffer.
+\\{claude-session-sidebar-mode-map}"
+  :group 'claude-session-sidebar
+  (setq-local truncate-lines t))
 
 (defun claude-session-sidebar--get-main-window (&optional frame)
   "Get the most recently used main window in FRAME.

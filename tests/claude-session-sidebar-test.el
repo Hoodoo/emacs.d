@@ -126,5 +126,63 @@ must be treated as \"no session info\", never let escape."
       (when (file-directory-p claude-dir) (delete-directory claude-dir))
       (when (file-directory-p project-dir) (delete-directory project-dir t)))))
 
+(ert-deftest claude-session-sidebar-test-create-sidebar-window-when-side-disabled ()
+  "Sidebar window is created even when its side is disabled -- same
+regression this pattern already guards against in vulpea-ui (vulpea-journal#21)."
+  (let ((window-sides-slots '(1 0 0 1))   ; right side disabled
+        (claude-session-sidebar-position 'right))
+    (save-window-excursion
+      (let* ((buf (get-buffer-create " *claude-session-sidebar-test*"))
+             (win (claude-session-sidebar--create-sidebar-window buf)))
+        (unwind-protect
+            (progn
+              (should (window-live-p win))
+              (should (eq (window-parameter win 'window-side) 'right)))
+          (when (window-live-p win) (ignore-errors (delete-window win)))
+          (when (buffer-live-p buf) (kill-buffer buf)))))))
+
+(ert-deftest claude-session-sidebar-test-hide-sidebar-window-keeps-non-side-window ()
+  (save-window-excursion
+    (let ((buf (get-buffer-create (claude-session-sidebar--sidebar-buffer-name))))
+      (unwind-protect
+          (progn
+            (switch-to-buffer buf)
+            (let ((win (selected-window)))
+              (should (eq (claude-session-sidebar--get-sidebar-window) win))
+              (should-not (window-parameter win 'window-side))
+              (claude-session-sidebar--hide-sidebar-window)
+              (should (window-live-p win))
+              (should (eq (window-buffer win) buf))))
+        (when (buffer-live-p buf) (kill-buffer buf))))))
+
+(ert-deftest claude-session-sidebar-test-hide-sidebar-window-deletes-side-window ()
+  (save-window-excursion
+    (let* ((buf (get-buffer-create (claude-session-sidebar--sidebar-buffer-name)))
+           (win (display-buffer-in-side-window buf '((side . right) (slot . 0)))))
+      (unwind-protect
+          (progn
+            (should (eq (claude-session-sidebar--get-sidebar-window) win))
+            (claude-session-sidebar--hide-sidebar-window)
+            (should-not (window-live-p win)))
+        (when (buffer-live-p buf) (kill-buffer buf))))))
+
+(ert-deftest claude-session-sidebar-test-sidebar-visible-p ()
+  (save-window-excursion
+    (let* ((buf (get-buffer-create (claude-session-sidebar--sidebar-buffer-name)))
+           (win (display-buffer-in-side-window buf '((side . right) (slot . 0)))))
+      (unwind-protect
+          (should (claude-session-sidebar--sidebar-visible-p))
+        (delete-window win)
+        (should-not (claude-session-sidebar--sidebar-visible-p))
+        (when (buffer-live-p buf) (kill-buffer buf))))))
+
+(ert-deftest claude-session-sidebar-test-mode-derives-from-vui-mode ()
+  (let ((buf (generate-new-buffer "sidebar-mode-test")))
+    (unwind-protect
+        (with-current-buffer buf
+          (claude-session-sidebar-mode)
+          (should (derived-mode-p 'vui-mode)))
+      (kill-buffer buf))))
+
 (provide 'claude-session-sidebar-test)
 ;;; claude-session-sidebar-test.el ends here
