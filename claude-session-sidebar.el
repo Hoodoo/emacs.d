@@ -121,6 +121,22 @@ Only an actual side window is deleted, mirroring
   :group 'claude-session-sidebar
   (setq-local truncate-lines t))
 
+(defvar claude-session-sidebar--widgets nil
+  "Alist of (ID :component SYMBOL :order NUMBER).")
+
+(defun claude-session-sidebar-register-widget (id &rest props)
+  "Register a sidebar widget under ID.
+PROPS is a plist: :component (a `vui-defcomponent' symbol taking a
+single :path prop) and :order (a number; lower renders earlier).
+Registering under an existing ID replaces its entry."
+  (setf (alist-get id claude-session-sidebar--widgets) props))
+
+(defun claude-session-sidebar--ordered-widgets ()
+  "Return `claude-session-sidebar--widgets' sorted by :order, ascending."
+  (sort (copy-alist claude-session-sidebar--widgets)
+        (lambda (a b) (< (or (plist-get (cdr a) :order) 0)
+                          (or (plist-get (cdr b) :order) 0)))))
+
 (defun claude-session-sidebar--get-main-window (&optional frame)
   "Get the most recently used main window in FRAME.
 A main window is a live, non-minibuffer window that is neither this

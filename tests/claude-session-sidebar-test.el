@@ -184,5 +184,20 @@ regression this pattern already guards against in vulpea-ui (vulpea-journal#21).
           (should (derived-mode-p 'vui-mode)))
       (kill-buffer buf))))
 
+(ert-deftest claude-session-sidebar-test-register-and-order-widgets ()
+  (let ((claude-session-sidebar--widgets nil))
+    (claude-session-sidebar-register-widget 'b :component 'widget-b :order 20)
+    (claude-session-sidebar-register-widget 'a :component 'widget-a :order 10)
+    (should (equal (mapcar #'car (claude-session-sidebar--ordered-widgets))
+                   '(a b)))))
+
+(ert-deftest claude-session-sidebar-test-register-widget-overwrites ()
+  (let ((claude-session-sidebar--widgets nil))
+    (claude-session-sidebar-register-widget 'a :component 'widget-a :order 10)
+    (claude-session-sidebar-register-widget 'a :component 'widget-a-v2 :order 10)
+    (should (= (length claude-session-sidebar--widgets) 1))
+    (should (equal (plist-get (cdr (assq 'a claude-session-sidebar--widgets)) :component)
+                   'widget-a-v2))))
+
 (provide 'claude-session-sidebar-test)
 ;;; claude-session-sidebar-test.el ends here
