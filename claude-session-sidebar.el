@@ -26,6 +26,10 @@
 (unless (boundp 'agent-shell-mode)
   (defvar agent-shell-mode nil))
 
+(defgroup claude-session-sidebar nil
+  "Sidebar showing claude-session-log stats for the session at point."
+  :group 'convenience)
+
 (defcustom claude-session-sidebar-position 'right
   "Position of the sidebar in the frame.
 One of `left', `right', `top', or `bottom'."
