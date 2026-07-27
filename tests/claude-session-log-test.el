@@ -106,7 +106,33 @@
                     (:type "tool_use" :id "tu2" :name "Read"
                      :input (:file_path "/tmp/b.el")))))
     (should (equal (claude-session-log--file-touches-in-content content)
-                   '("/tmp/a.el" "/tmp/b.el")))))
+                   '(("/tmp/a.el" . "Edit") ("/tmp/b.el" . "Read"))))))
+
+(ert-deftest claude-session-log-test-file-touch-operation ()
+  (should (eq (claude-session-log--file-touch-operation "Read") 'read))
+  (should (eq (claude-session-log--file-touch-operation "Edit") 'write))
+  (should (eq (claude-session-log--file-touch-operation "Write") 'write))
+  (should (eq (claude-session-log--file-touch-operation "NotebookEdit") 'write)))
+
+(ert-deftest claude-session-log-test-record-file-operation ()
+  (let (alist)
+    (setq alist (claude-session-log--record-file-operation alist "/tmp/a.el" 'read))
+    (should (eq (alist-get "/tmp/a.el" alist nil nil #'equal) 'read))
+    ;; A later write on the same path upgrades read -> write.
+    (setq alist (claude-session-log--record-file-operation alist "/tmp/a.el" 'write))
+    (should (eq (alist-get "/tmp/a.el" alist nil nil #'equal) 'write))
+    ;; A later read on an already-`write' path must not downgrade it.
+    (setq alist (claude-session-log--record-file-operation alist "/tmp/a.el" 'read))
+    (should (eq (alist-get "/tmp/a.el" alist nil nil #'equal) 'write))))
+
+(ert-deftest claude-session-log-test-merge-file-operations ()
+  (let ((main '(("/tmp/a.el" . read) ("/tmp/b.el" . write)))
+        (sub '(("/tmp/a.el" . write) ("/tmp/c.el" . read))))
+    (let ((merged (claude-session-log--merge-file-operations main sub)))
+      ;; /tmp/a.el: read in main, write in sub -- write wins.
+      (should (eq (alist-get "/tmp/a.el" merged nil nil #'equal) 'write))
+      (should (eq (alist-get "/tmp/b.el" merged nil nil #'equal) 'write))
+      (should (eq (alist-get "/tmp/c.el" merged nil nil #'equal) 'read)))))
 
 (ert-deftest claude-session-log-test-file-touches-in-content-string-content ()
   (should (null (claude-session-log--file-touches-in-content "plain text content"))))
@@ -180,7 +206,12 @@ verified real Claude Code JSONL line shapes.")
                    '("/home/hoooo/.emacs.d/init.el")))
     (should (equal (claude-session-log-session-cwds s) '("/home/hoooo/.emacs.d")))
     (should (equal (claude-session-log-session-branches s)
-                   '("main" "worktree-agent-shell")))))
+                   '("main" "worktree-agent-shell")))
+    ;; Edit came before Read in the fixture -- write must win, even
+    ;; though the later touch on the same file was a plain Read.
+    (should (eq (alist-get "/home/hoooo/.emacs.d/init.el"
+                           (claude-session-log-session-file-operations s) nil nil #'equal)
+                'write))))
 
 (ert-deftest claude-session-log-test-parse-lines-task-list-last-wins ()
   (let* ((s (claude-session-log--parse-lines
@@ -255,6 +286,7 @@ verified real Claude Code JSONL line shapes.")
                            '(:input 5 :output 2 :cache-write-5m 0 :cache-write-1h 0 :cache-read 0)))
             (should (equal (claude-session-log-subagent-models sub) '("claude-sonnet-5")))
             (should (null (claude-session-log-subagent-files-touched sub)))
+            (should (null (claude-session-log-subagent-file-operations sub)))
             (should (null (claude-session-log-subagent-total-cost sub)))))
       (delete-directory dir t))))
 
@@ -352,6 +384,9 @@ verified real Claude Code JSONL line shapes.")
             (should (equal (claude-session-log-session-models s) '("claude-sonnet-5" "claude-haiku-4-5")))
             (should (equal (claude-session-log-session-files-touched s)
                            '("/home/hoooo/.emacs.d/init.el")))
+            (should (eq (alist-get "/home/hoooo/.emacs.d/init.el"
+                                   (claude-session-log-session-file-operations s) nil nil #'equal)
+                        'write))
             (should (equal (claude-session-log-session-cwds s) '("/home/hoooo/.emacs.d")))
             (should (equal (claude-session-log-session-branches s) '("main")))
             (should (equal (plist-get (car (plist-get
@@ -373,6 +408,41 @@ verified real Claude Code JSONL line shapes.")
             ;; total-cost includes the subagent: $2.00 + $1.00 = $3.00.
             (should (= (claude-session-log-session-total-cost s) 3.00))
             (should (null (claude-session-log-session-unpriced-models s)))))
+      (delete-directory dir t))))
+
+(ert-deftest claude-session-log-test-parse-file-file-operations-span-subagents ()
+  "The main session only reads init.el; a subagent later edits it --
+the merged operation must be `write', matching how `files-touched'
+already spans main + subagents."
+  (let* ((dir (make-temp-file "claude-session-log-test" t))
+         (source-path (expand-file-name "sess.jsonl" dir))
+         (subagents-dir (expand-file-name "subagents" (file-name-sans-extension source-path)))
+         (meta-path (expand-file-name "agent-1.meta.json" subagents-dir))
+         (agent-jsonl-path (expand-file-name "agent-1.jsonl" subagents-dir)))
+    (unwind-protect
+        (progn
+          (make-directory subagents-dir t)
+          (claude-session-log-test--write-jsonl
+           source-path
+           (list (concat "{\"type\":\"assistant\",\"timestamp\":\"2026-07-21T10:00:00.000Z\","
+                         "\"message\":{\"role\":\"assistant\",\"model\":\"claude-sonnet-5\","
+                         "\"content\":[{\"type\":\"tool_use\",\"id\":\"tu1\",\"name\":\"Read\","
+                         "\"input\":{\"file_path\":\"/home/hoooo/.emacs.d/init.el\"}}],"
+                         "\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}")))
+          (with-temp-file meta-path
+            (insert "{\"agentType\":\"general-purpose\",\"description\":\"help\","
+                    "\"toolUseId\":\"toolu_1\",\"spawnDepth\":1,\"model\":\"sonnet\"}"))
+          (claude-session-log-test--write-jsonl
+           agent-jsonl-path
+           (list (concat "{\"type\":\"assistant\",\"timestamp\":\"2026-07-21T10:00:02.000Z\","
+                         "\"message\":{\"role\":\"assistant\",\"model\":\"claude-sonnet-5\","
+                         "\"content\":[{\"type\":\"tool_use\",\"id\":\"tu2\",\"name\":\"Edit\","
+                         "\"input\":{\"file_path\":\"/home/hoooo/.emacs.d/init.el\"}}],"
+                         "\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}")))
+          (let ((s (claude-session-log-parse-file source-path)))
+            (should (eq (alist-get "/home/hoooo/.emacs.d/init.el"
+                                   (claude-session-log-session-file-operations s) nil nil #'equal)
+                        'write))))
       (delete-directory dir t))))
 
 (ert-deftest claude-session-log-test-parse-file-no-subagents ()

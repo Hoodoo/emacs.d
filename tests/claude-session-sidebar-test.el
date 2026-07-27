@@ -368,6 +368,55 @@ regression this pattern already guards against in vulpea-ui (vulpea-journal#21).
               (kill-buffer (vui-instance-buffer instance)))))
       (delete-directory dir t))))
 
+(ert-deftest claude-session-sidebar-test-widget-title-uses-explicit-title ()
+  (should (equal (claude-session-sidebar--widget-title
+                  (cons 'stats (list :component 'x :title "Stats")))
+                 "Stats")))
+
+(ert-deftest claude-session-sidebar-test-widget-title-falls-back-to-capitalized-id ()
+  "A widget registered without :title (e.g. by an older caller, or a
+test that only cares about :component) still gets a readable header
+instead of no label at all."
+  (should (equal (claude-session-sidebar--widget-title
+                  (cons 'files-touched (list :component 'x)))
+                 "Files Touched")))
+
+(ert-deftest claude-session-sidebar-test-interleave-separators ()
+  (should (null (claude-session-sidebar--interleave-separators nil)))
+  (should (equal (claude-session-sidebar--interleave-separators (list "a"))
+                 (list "a")))
+  (should (equal (claude-session-sidebar--interleave-separators (list "a" "b" "c"))
+                 (list "a" (claude-session-sidebar--separator) "b"
+                       (claude-session-sidebar--separator) "c"))))
+
+(ert-deftest claude-session-sidebar-test-root-shows-titles-and-separators ()
+  (let ((claude-session-sidebar--widgets nil)
+        (dir (make-temp-file "claude-session-sidebar-test" t)))
+    (unwind-protect
+        (let ((path (expand-file-name "sess.jsonl" dir)))
+          (with-temp-file path
+            (insert (concat "{\"type\":\"assistant\",\"timestamp\":\"2026-07-21T10:00:00.000Z\","
+                            "\"message\":{\"role\":\"assistant\",\"model\":\"claude-sonnet-5\","
+                            "\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n")))
+          (claude-session-sidebar-register-widget
+           'stats :component 'claude-session-sidebar-widget-stats :order 10 :title "Stats")
+          (claude-session-sidebar-register-widget
+           'task-list :component 'claude-session-sidebar-widget-task-list :order 5 :title "Plan")
+          (let ((instance (vui-mount (vui-component 'claude-session-sidebar-root :path path)
+                                      "*claude-session-sidebar-root-test-3*")))
+            (unwind-protect
+                (with-current-buffer (vui-instance-buffer instance)
+                  (let ((text (buffer-string)))
+                    (should (string-match-p "Plan" text))
+                    (should (string-match-p "Stats" text))
+                    ;; "Plan" (order 5) must render before "Stats" (order 10).
+                    (should (< (string-match "Plan" text) (string-match "Stats" text)))
+                    ;; Exactly one separator between the two sections, none
+                    ;; before the first or after the last.
+                    (should (string-match-p "─" text))))
+              (kill-buffer (vui-instance-buffer instance)))))
+      (delete-directory dir t))))
+
 (ert-deftest claude-session-sidebar-test-stats-widget-registered-by-default ()
   "Regression test for the whole-branch-review finding: the stats
 widget must be registered at load time, not just inside tests that
@@ -375,6 +424,13 @@ register it manually via a `let'-bound `claude-session-sidebar--widgets'."
   (should (assq 'stats claude-session-sidebar--widgets))
   (should (eq (plist-get (cdr (assq 'stats claude-session-sidebar--widgets)) :component)
               'claude-session-sidebar-widget-stats)))
+
+(ert-deftest claude-session-sidebar-test-default-widget-order ()
+  "Locks in the requested reading order: branch/cwd and activity first
+(orientation), then stats and subagents (what happened), then the plan
+and files touched (what's next / what changed)."
+  (should (equal (mapcar #'car (claude-session-sidebar--ordered-widgets))
+                 '(git-info activity stats subagents task-list files-touched))))
 
 (ert-deftest claude-session-sidebar-test-task-list-widget-registered-by-default ()
   (should (assq 'task-list claude-session-sidebar--widgets))
@@ -491,6 +547,22 @@ out the sidebar's width."
                      (buffer-string))))
     (should (string-match-p "~/foo\\.el" rendered))
     (should (string-match-p "/tmp/bar\\.el" rendered))))
+
+(ert-deftest claude-session-sidebar-test-render-files-touched-colors-by-operation ()
+  "Read-only files render in `vui-success' face; written files (any
+Edit/Write/NotebookEdit touch) render in `vui-warning' -- the whole
+point of distinguishing them at a glance. A file with no recorded
+operation (shouldn't normally happen, but defensively) falls back to
+the less alarming `read' treatment."
+  (let* ((session (make-claude-session-log-session
+                   :files-touched '("/tmp/a.el" "/tmp/b.el" "/tmp/c.el")
+                   :file-operations '(("/tmp/a.el" . read) ("/tmp/b.el" . write))))
+         (rendered (with-temp-buffer
+                     (vui-render (claude-session-sidebar--render-files-touched session))
+                     (buffer-string))))
+    (should (eq (get-text-property (string-match "a\\.el" rendered) 'face rendered) 'vui-success))
+    (should (eq (get-text-property (string-match "b\\.el" rendered) 'face rendered) 'vui-warning))
+    (should (eq (get-text-property (string-match "c\\.el" rendered) 'face rendered) 'vui-success))))
 
 (ert-deftest claude-session-sidebar-test-subagents-widget-registered-by-default ()
   (should (assq 'subagents claude-session-sidebar--widgets))

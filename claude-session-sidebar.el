@@ -125,7 +125,9 @@ Only an actual side window is deleted, mirroring
 (defun claude-session-sidebar-register-widget (id &rest props)
   "Register a sidebar widget under ID.
 PROPS is a plist: :component (a `vui-defcomponent' symbol taking a
-single :path prop) and :order (a number; lower renders earlier).
+single :path prop), :order (a number; lower renders earlier), and
+:title (a header string shown above the widget; defaults to ID
+capitalized if omitted -- see `claude-session-sidebar--widget-title').
 Registering under an existing ID replaces its entry."
   (setf (alist-get id claude-session-sidebar--widgets) props))
 
@@ -134,6 +136,13 @@ Registering under an existing ID replaces its entry."
   (sort (copy-alist claude-session-sidebar--widgets)
         (lambda (a b) (< (or (plist-get (cdr a) :order) 0)
                           (or (plist-get (cdr b) :order) 0)))))
+
+(defun claude-session-sidebar--widget-title (entry)
+  "Return ENTRY's (a `claude-session-sidebar--ordered-widgets' cons)
+display title: its :title prop, or its id capitalized with dashes
+turned to spaces if omitted."
+  (or (plist-get (cdr entry) :title)
+      (capitalize (replace-regexp-in-string "-" " " (symbol-name (car entry))))))
 
 (defun claude-session-sidebar--aggregate-tokens (session)
   "Return (INPUT . OUTPUT) token totals summed across every model in SESSION."
@@ -207,7 +216,7 @@ Returns one of:
       (_ (vui-muted "Loading…")))))
 
 (claude-session-sidebar-register-widget
- 'stats :component 'claude-session-sidebar-widget-stats :order 10)
+ 'stats :component 'claude-session-sidebar-widget-stats :order 3 :title "Stats")
 
 (defun claude-session-sidebar--task-status-marker (status)
   "Return a checkbox-style marker string for a task's STATUS string."
@@ -254,18 +263,29 @@ plists, each with `:subject' and `:status'."
       (_ (vui-muted "Loading…")))))
 
 (claude-session-sidebar-register-widget
- 'task-list :component 'claude-session-sidebar-widget-task-list :order 5)
+ 'task-list :component 'claude-session-sidebar-widget-task-list :order 5 :title "Plan")
 
 (defun claude-session-sidebar--render-files-touched (session)
-  "Render SESSION's `files-touched' list as a vnode.
+  "Render SESSION's `files-touched' list as a vnode, color-coded by
+`file-operations': read-only files in `vui-success' (green, nothing
+changed), written files (any Edit/Write/NotebookEdit touch) in
+`vui-warning' (stands out as modified). A path missing from
+`file-operations' (shouldn't normally happen) defaults to the less
+alarming `read' treatment.
+
 Paths are already deduped by `claude-session-log-session-files-touched';
 abbreviated under `$HOME' here so long absolute paths don't blow out
 the sidebar's width."
-  (let ((files (claude-session-log-session-files-touched session)))
+  (let ((files (claude-session-log-session-files-touched session))
+        (operations (claude-session-log-session-file-operations session)))
     (if (null files)
         (vui-muted "No files touched.")
       (apply #'vui-vstack
-             (mapcar (lambda (f) (vui-text (abbreviate-file-name f))) files)))))
+             (mapcar (lambda (f)
+                       (let ((op (or (alist-get f operations nil nil #'equal) 'read)))
+                         (funcall (if (eq op 'write) #'vui-warning #'vui-success)
+                                  (abbreviate-file-name f))))
+                     files)))))
 
 (vui-defcomponent claude-session-sidebar-widget-files-touched (path)
   "Files-touched widget: files read/edited this session, for PATH."
@@ -288,7 +308,7 @@ the sidebar's width."
       (_ (vui-muted "Loading…")))))
 
 (claude-session-sidebar-register-widget
- 'files-touched :component 'claude-session-sidebar-widget-files-touched :order 6)
+ 'files-touched :component 'claude-session-sidebar-widget-files-touched :order 6 :title "Files Touched")
 
 (defun claude-session-sidebar--render-subagents (session)
   "Render SESSION's subagents as a vnode.
@@ -328,7 +348,7 @@ Each line shows the subagent's type, description, and own total cost
       (_ (vui-muted "Loading…")))))
 
 (claude-session-sidebar-register-widget
- 'subagents :component 'claude-session-sidebar-widget-subagents :order 7)
+ 'subagents :component 'claude-session-sidebar-widget-subagents :order 4 :title "Subagents")
 
 (defun claude-session-sidebar--render-git-info (session)
   "Render SESSION's current branch/cwd as a vnode, flagging either if
@@ -372,7 +392,7 @@ either if it changed mid-session."
       (_ (vui-muted "Loading…")))))
 
 (claude-session-sidebar-register-widget
- 'git-info :component 'claude-session-sidebar-widget-git-info :order 8)
+ 'git-info :component 'claude-session-sidebar-widget-git-info :order 1 :title "Branch & Cwd")
 
 (defun claude-session-sidebar--render-activity (session &optional now)
   "Render SESSION's most recent event as a vnode: its type/model and how
@@ -417,18 +437,46 @@ callers pass it explicitly to keep tests deterministic."
       (_ (vui-muted "Loading…")))))
 
 (claude-session-sidebar-register-widget
- 'activity :component 'claude-session-sidebar-widget-activity :order 9)
+ 'activity :component 'claude-session-sidebar-widget-activity :order 2 :title "Activity")
+
+(defface claude-session-sidebar-widget-header-face
+  '((t :inherit bold))
+  "Face for claude-session-sidebar widget section headers."
+  :group 'claude-session-sidebar)
+
+(defun claude-session-sidebar--separator ()
+  "Return a vnode rendering a thin horizontal rule between widget sections."
+  (vui-muted (make-string 24 ?─)))
+
+(defun claude-session-sidebar--interleave-separators (blocks)
+  "Return BLOCKS with a `claude-session-sidebar--separator' vnode
+inserted between each pair -- never before the first or after the last."
+  (when blocks
+    (cons (car blocks)
+          (mapcan (lambda (b) (list (claude-session-sidebar--separator) b))
+                  (cdr blocks)))))
+
+(defun claude-session-sidebar--render-widget-section (entry path)
+  "Render ENTRY (a `claude-session-sidebar--ordered-widgets' cons) as a
+titled section: its header followed by its widget component, PATH
+passed through."
+  (vui-vstack
+   (vui-text (claude-session-sidebar--widget-title entry)
+     :face 'claude-session-sidebar-widget-header-face)
+   (vui-component (plist-get (cdr entry) :component) :path path)))
 
 (vui-defcomponent claude-session-sidebar-root (path)
   "Root sidebar component: no-session message, or every registered
-widget in `:order', each passed PATH."
+widget in `:order', each labeled with its title and separated from its
+neighbors by a thin rule."
   :render
   (if (null path)
       (vui-muted "No Claude Code session at point.")
     (apply #'vui-vstack
-           (mapcar (lambda (entry)
-                     (vui-component (plist-get (cdr entry) :component) :path path))
-                   (claude-session-sidebar--ordered-widgets)))))
+           (claude-session-sidebar--interleave-separators
+            (mapcar (lambda (entry)
+                      (claude-session-sidebar--render-widget-section entry path))
+                    (claude-session-sidebar--ordered-widgets))))))
 
 (defvar claude-session-sidebar--instances (make-hash-table :test 'eq)
   "Hash table of frame -> `vui-instance' for the sidebar root component.")

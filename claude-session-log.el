@@ -25,6 +25,7 @@
   total-cost
   unpriced-models
   files-touched
+  file-operations
   cwds branches
   task-list
   subagents
@@ -35,7 +36,8 @@
   usage-by-model
   total-cost
   models
-  files-touched)
+  files-touched
+  file-operations)
 
 (defconst claude-session-log-model-prices
   '(("claude-fable-5" . (10.00 . 50.00))
@@ -66,6 +68,33 @@ known maintenance cost, not a bug.")
 (defconst claude-session-log-file-touching-tools '("Edit" "Write" "Read" "NotebookEdit")
   "Tool names whose `tool_use' blocks carry a `file_path' input worth
 recording in a session's `files-touched' list.")
+
+(defconst claude-session-log-file-write-tools '("Edit" "Write" "NotebookEdit")
+  "Subset of `claude-session-log-file-touching-tools' that modify
+`file_path' rather than merely read it.")
+
+(defun claude-session-log--file-touch-operation (tool-name)
+  "Return `write' if TOOL-NAME modifies the file it touches, else `read'."
+  (if (member tool-name claude-session-log-file-write-tools) 'write 'read))
+
+(defun claude-session-log--record-file-operation (alist path op)
+  "Return ALIST with PATH's operation updated to OP (`read' or `write').
+`write' dominates: once a path is marked `write', a later `read' of
+the same path never downgrades it back."
+  (let ((existing (alist-get path alist nil nil #'equal)))
+    (when (or (eq op 'write) (null existing))
+      (setf (alist-get path alist nil nil #'equal) op)))
+  alist)
+
+(defun claude-session-log--merge-file-operations (&rest alists)
+  "Merge ALISTS of path -> `read'/`write' into one, `write' dominating.
+Used to fold each subagent's file operations into the main session's,
+mirroring how `files-touched' already spans main + subagents."
+  (let (merged)
+    (dolist (alist alists)
+      (dolist (entry alist)
+        (setq merged (claude-session-log--record-file-operation merged (car entry) (cdr entry)))))
+    merged))
 
 (defun claude-session-log--price-per-million (model)
   "Return (input-price . output-price), dollars per 1M tokens, for MODEL.
@@ -140,17 +169,18 @@ END, or nil if either is missing."
                                 (claude-session-log--parse-timestamp start)))))
 
 (defun claude-session-log--file-touches-in-content (content)
-  "Return `file_path' values from `Edit'/`Write'/`Read'/`NotebookEdit'
-`tool_use' blocks in CONTENT (a message's content-block list). CONTENT
-may also be a plain string (a user message with no blocks) or nil, in
-which case this returns nil."
+  "Return (FILE-PATH . TOOL-NAME) pairs from `Edit'/`Write'/`Read'/
+`NotebookEdit' `tool_use' blocks in CONTENT (a message's content-block
+list). CONTENT may also be a plain string (a user message with no
+blocks) or nil, in which case this returns nil."
   (when (listp content)
     (delq nil
           (mapcar (lambda (block)
                     (when (and (equal (plist-get block :type) "tool_use")
                                (member (plist-get block :name)
                                        claude-session-log-file-touching-tools))
-                      (plist-get (plist-get block :input) :file_path)))
+                      (when-let ((path (plist-get (plist-get block :input) :file_path)))
+                        (cons path (plist-get block :name)))))
                   content))))
 
 (defun claude-session-log--parse-lines (session-id source-path lines)
@@ -160,7 +190,7 @@ for SESSION-ID at SOURCE-PATH. `cost-by-model', `total-cost',
 in separately (see `claude-session-log--apply-costs' and
 `claude-session-log--find-subagent-meta-files')."
   (let ((usage-table (make-hash-table :test #'equal))
-        models files-touched cwds branches events
+        models files-touched file-operations cwds branches events
         task-list start-time end-time)
     (dolist (line lines)
       (let ((timestamp (plist-get line :timestamp))
@@ -185,9 +215,13 @@ in separately (see `claude-session-log--apply-costs' and
                                     (claude-session-log--zero-usage))))
                   (puthash model (claude-session-log--merge-usage existing normalized)
                            usage-table))))
-            (dolist (path (claude-session-log--file-touches-in-content
+            (dolist (touch (claude-session-log--file-touches-in-content
                            (plist-get message :content)))
-              (cl-pushnew path files-touched :test #'equal))
+              (cl-pushnew (car touch) files-touched :test #'equal)
+              (setq file-operations
+                    (claude-session-log--record-file-operation
+                     file-operations (car touch)
+                     (claude-session-log--file-touch-operation (cdr touch)))))
             (push (list :timestamp timestamp :type type
                         :role (plist-get message :role) :model model
                         :is-meta (plist-get line :isMeta)
@@ -215,6 +249,7 @@ in separately (see `claude-session-log--apply-costs' and
                         (maphash (lambda (k v) (push (cons k v) alist)) usage-table)
                         alist)
      :files-touched (nreverse files-touched)
+     :file-operations file-operations
      :cwds (nreverse cwds)
      :branches (nreverse branches)
      :task-list task-list
@@ -261,7 +296,8 @@ carrying a `spawnDepth' field."
      :tool-use-id (plist-get meta :toolUseId)
      :usage-by-model (claude-session-log-session-usage-by-model parsed)
      :models (claude-session-log-session-models parsed)
-     :files-touched (claude-session-log-session-files-touched parsed))))
+     :files-touched (claude-session-log-session-files-touched parsed)
+     :file-operations (claude-session-log-session-file-operations parsed))))
 
 (defun claude-session-log--cost-for-usage (usage prices)
   "Return the dollar cost of usage plist USAGE given PRICES = (input-price
@@ -345,6 +381,10 @@ two fields span main + subagents."
           (seq-uniq (append (claude-session-log-session-files-touched session)
                              (apply #'append (mapcar #'claude-session-log-subagent-files-touched subagents)))
                      #'equal))
+    (setf (claude-session-log-session-file-operations session)
+          (apply #'claude-session-log--merge-file-operations
+                 (claude-session-log-session-file-operations session)
+                 (mapcar #'claude-session-log-subagent-file-operations subagents)))
     (claude-session-log--apply-costs session)))
 
 (provide 'claude-session-log)
