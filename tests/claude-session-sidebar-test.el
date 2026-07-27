@@ -376,6 +376,269 @@ register it manually via a `let'-bound `claude-session-sidebar--widgets'."
   (should (eq (plist-get (cdr (assq 'stats claude-session-sidebar--widgets)) :component)
               'claude-session-sidebar-widget-stats)))
 
+(ert-deftest claude-session-sidebar-test-task-list-widget-registered-by-default ()
+  (should (assq 'task-list claude-session-sidebar--widgets))
+  (should (eq (plist-get (cdr (assq 'task-list claude-session-sidebar--widgets)) :component)
+              'claude-session-sidebar-widget-task-list)))
+
+(ert-deftest claude-session-sidebar-test-widget-task-list-renders-real-session ()
+  (let* ((dir (make-temp-file "claude-session-sidebar-test" t))
+         (path (expand-file-name "sess.jsonl" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (insert (concat "{\"type\":\"attachment\",\"timestamp\":\"2026-07-21T10:00:00.000Z\","
+                            "\"attachment\":{\"type\":\"task_reminder\",\"itemCount\":2,"
+                            "\"content\":[{\"id\":\"1\",\"subject\":\"Write the widget\","
+                            "\"status\":\"completed\",\"blocks\":[],\"blockedBy\":[]},"
+                            "{\"id\":\"2\",\"subject\":\"Test the widget\","
+                            "\"status\":\"in_progress\",\"blocks\":[],\"blockedBy\":[]}]}}\n")))
+          (let ((instance (vui-mount (vui-component 'claude-session-sidebar-widget-task-list :path path)
+                                      "*claude-session-sidebar-widget-test*")))
+            (unwind-protect
+                (with-current-buffer (vui-instance-buffer instance)
+                  (should (string-match-p "Write the widget" (buffer-string)))
+                  (should (string-match-p "Test the widget" (buffer-string))))
+              (kill-buffer (vui-instance-buffer instance)))))
+      (delete-directory dir t))))
+
+(ert-deftest claude-session-sidebar-test-widget-task-list-no-tasks ()
+  "When the session has no task_reminder attachment yet (task-list nil)
+or its content is empty, the widget must say so instead of erroring or
+rendering a blank list."
+  (let* ((dir (make-temp-file "claude-session-sidebar-test" t))
+         (path (expand-file-name "sess.jsonl" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (insert (concat "{\"type\":\"assistant\",\"timestamp\":\"2026-07-21T10:00:00.000Z\","
+                            "\"message\":{\"role\":\"assistant\",\"model\":\"claude-sonnet-5\","
+                            "\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n")))
+          (let ((instance (vui-mount (vui-component 'claude-session-sidebar-widget-task-list :path path)
+                                      "*claude-session-sidebar-widget-test*")))
+            (unwind-protect
+                (with-current-buffer (vui-instance-buffer instance)
+                  (should (string-match-p "No tasks" (buffer-string))))
+              (kill-buffer (vui-instance-buffer instance)))))
+      (delete-directory dir t))))
+
+(ert-deftest claude-session-sidebar-test-render-task-list-status-markers ()
+  "Each task renders with a marker reflecting its status, so pending,
+in-progress, and completed tasks are visually distinguishable at a
+glance -- the whole point of a task-list widget."
+  (let* ((task-list (list :type "task_reminder" :itemCount 3
+                          :content (list (list :id "1" :subject "done one" :status "completed")
+                                         (list :id "2" :subject "doing one" :status "in_progress")
+                                         (list :id "3" :subject "todo one" :status "pending"))))
+         (session (make-claude-session-log-session :task-list task-list))
+         (rendered (with-temp-buffer
+                     (vui-render (claude-session-sidebar--render-task-list session))
+                     (buffer-string))))
+    (should (string-match-p "\\[x\\].*done one" rendered))
+    (should (string-match-p "\\[~\\].*doing one" rendered))
+    (should (string-match-p "\\[ \\].*todo one" rendered))))
+
+(ert-deftest claude-session-sidebar-test-files-touched-widget-registered-by-default ()
+  (should (assq 'files-touched claude-session-sidebar--widgets))
+  (should (eq (plist-get (cdr (assq 'files-touched claude-session-sidebar--widgets)) :component)
+              'claude-session-sidebar-widget-files-touched)))
+
+(ert-deftest claude-session-sidebar-test-widget-files-touched-renders-real-session ()
+  (let* ((dir (make-temp-file "claude-session-sidebar-test" t))
+         (path (expand-file-name "sess.jsonl" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (insert (concat "{\"type\":\"assistant\",\"timestamp\":\"2026-07-21T10:00:00.000Z\","
+                            "\"message\":{\"role\":\"assistant\",\"model\":\"claude-sonnet-5\","
+                            "\"content\":[{\"type\":\"tool_use\",\"name\":\"Edit\","
+                            "\"input\":{\"file_path\":\"/tmp/foo.el\"}}],"
+                            "\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n")))
+          (let ((instance (vui-mount (vui-component 'claude-session-sidebar-widget-files-touched :path path)
+                                      "*claude-session-sidebar-widget-test*")))
+            (unwind-protect
+                (with-current-buffer (vui-instance-buffer instance)
+                  (should (string-match-p "foo\\.el" (buffer-string))))
+              (kill-buffer (vui-instance-buffer instance)))))
+      (delete-directory dir t))))
+
+(ert-deftest claude-session-sidebar-test-widget-files-touched-none ()
+  (let* ((dir (make-temp-file "claude-session-sidebar-test" t))
+         (path (expand-file-name "sess.jsonl" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (insert (concat "{\"type\":\"assistant\",\"timestamp\":\"2026-07-21T10:00:00.000Z\","
+                            "\"message\":{\"role\":\"assistant\",\"model\":\"claude-sonnet-5\","
+                            "\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n")))
+          (let ((instance (vui-mount (vui-component 'claude-session-sidebar-widget-files-touched :path path)
+                                      "*claude-session-sidebar-widget-test*")))
+            (unwind-protect
+                (with-current-buffer (vui-instance-buffer instance)
+                  (should (string-match-p "No files touched" (buffer-string))))
+              (kill-buffer (vui-instance-buffer instance)))))
+      (delete-directory dir t))))
+
+(ert-deftest claude-session-sidebar-test-render-files-touched-dedupes-and-abbreviates ()
+  "`files-touched' is already deduped by the parser; the widget must
+also abbreviate paths under `$HOME' so long absolute paths don't blow
+out the sidebar's width."
+  (let* ((session (make-claude-session-log-session
+                   :files-touched (list (expand-file-name "foo.el" "~")
+                                        "/tmp/bar.el")))
+         (rendered (with-temp-buffer
+                     (vui-render (claude-session-sidebar--render-files-touched session))
+                     (buffer-string))))
+    (should (string-match-p "~/foo\\.el" rendered))
+    (should (string-match-p "/tmp/bar\\.el" rendered))))
+
+(ert-deftest claude-session-sidebar-test-subagents-widget-registered-by-default ()
+  (should (assq 'subagents claude-session-sidebar--widgets))
+  (should (eq (plist-get (cdr (assq 'subagents claude-session-sidebar--widgets)) :component)
+              'claude-session-sidebar-widget-subagents)))
+
+(ert-deftest claude-session-sidebar-test-render-subagents-shows-type-description-cost ()
+  (let* ((subagent (make-claude-session-log-subagent
+                    :agent-type "general-purpose" :description "Review Task 1"
+                    :total-cost 0.0123))
+         (session (make-claude-session-log-session :subagents (list subagent)))
+         (rendered (with-temp-buffer
+                     (vui-render (claude-session-sidebar--render-subagents session))
+                     (buffer-string))))
+    (should (string-match-p "general-purpose" rendered))
+    (should (string-match-p "Review Task 1" rendered))
+    (should (string-match-p "\\$0\\.0123" rendered))))
+
+(ert-deftest claude-session-sidebar-test-widget-subagents-none ()
+  (let* ((dir (make-temp-file "claude-session-sidebar-test" t))
+         (path (expand-file-name "sess.jsonl" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (insert (concat "{\"type\":\"assistant\",\"timestamp\":\"2026-07-21T10:00:00.000Z\","
+                            "\"message\":{\"role\":\"assistant\",\"model\":\"claude-sonnet-5\","
+                            "\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n")))
+          (let ((instance (vui-mount (vui-component 'claude-session-sidebar-widget-subagents :path path)
+                                      "*claude-session-sidebar-widget-test*")))
+            (unwind-protect
+                (with-current-buffer (vui-instance-buffer instance)
+                  (should (string-match-p "No subagents" (buffer-string))))
+              (kill-buffer (vui-instance-buffer instance)))))
+      (delete-directory dir t))))
+
+(ert-deftest claude-session-sidebar-test-widget-subagents-renders-real-session ()
+  (let* ((dir (make-temp-file "claude-session-sidebar-test" t))
+         (source-path (expand-file-name "sess.jsonl" dir))
+         (subagents-dir (expand-file-name "subagents" (file-name-sans-extension source-path)))
+         (meta-path (expand-file-name "agent-1.meta.json" subagents-dir))
+         (agent-jsonl-path (expand-file-name "agent-1.jsonl" subagents-dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file source-path
+            (insert "{\"type\":\"user\"}\n"))
+          (make-directory subagents-dir t)
+          (with-temp-file meta-path
+            (insert "{\"agentType\":\"general-purpose\",\"description\":\"Review Task 1\","
+                    "\"toolUseId\":\"toolu_01ABC\",\"spawnDepth\":1,\"model\":\"sonnet\"}"))
+          (with-temp-file agent-jsonl-path
+            (insert (concat "{\"type\":\"assistant\",\"timestamp\":\"2026-07-21T10:00:00.000Z\","
+                            "\"message\":{\"role\":\"assistant\",\"model\":\"claude-sonnet-5\","
+                            "\"content\":[],\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}}\n")))
+          (let ((instance (vui-mount (vui-component 'claude-session-sidebar-widget-subagents :path source-path)
+                                      "*claude-session-sidebar-widget-test*")))
+            (unwind-protect
+                (with-current-buffer (vui-instance-buffer instance)
+                  (should (string-match-p "general-purpose" (buffer-string)))
+                  (should (string-match-p "Review Task 1" (buffer-string))))
+              (kill-buffer (vui-instance-buffer instance)))))
+      (delete-directory dir t))))
+
+(ert-deftest claude-session-sidebar-test-git-info-widget-registered-by-default ()
+  (should (assq 'git-info claude-session-sidebar--widgets))
+  (should (eq (plist-get (cdr (assq 'git-info claude-session-sidebar--widgets)) :component)
+              'claude-session-sidebar-widget-git-info)))
+
+(ert-deftest claude-session-sidebar-test-render-git-info-stable-branch-and-cwd ()
+  "A session that never changed cwd or branch shows both plainly, with
+no \"changed\" warning."
+  (let* ((session (make-claude-session-log-session
+                   :cwds '("/home/hoooo/.emacs.d") :branches '("main")))
+         (rendered (with-temp-buffer
+                     (vui-render (claude-session-sidebar--render-git-info session))
+                     (buffer-string))))
+    (should (string-match-p "Branch: main" rendered))
+    (should (string-match-p "Cwd: .*\\.emacs\\.d" rendered))
+    (should-not (string-match-p "changed" rendered))))
+
+(ert-deftest claude-session-sidebar-test-render-git-info-changed-branch-and-cwd ()
+  "Multiple distinct branches/cwds seen this session must be flagged --
+that's the whole point of this widget: catching an unexpected `cd' or
+branch switch mid-session."
+  (let* ((session (make-claude-session-log-session
+                   :cwds '("/tmp/a" "/tmp/b") :branches '("main" "feature-x")))
+         (rendered (with-temp-buffer
+                     (vui-render (claude-session-sidebar--render-git-info session))
+                     (buffer-string))))
+    (should (string-match-p "Branch: feature-x" rendered))
+    (should (string-match-p "Cwd: /tmp/b" rendered))
+    (should (string-match-p "[Bb]ranch changed" rendered))
+    (should (string-match-p "[Cc]wd changed" rendered))))
+
+(ert-deftest claude-session-sidebar-test-render-git-info-no-data ()
+  (let* ((session (make-claude-session-log-session))
+         (rendered (with-temp-buffer
+                     (vui-render (claude-session-sidebar--render-git-info session))
+                     (buffer-string))))
+    (should (string-match-p "No git info" rendered))))
+
+(ert-deftest claude-session-sidebar-test-widget-git-info-renders-real-session ()
+  (let* ((dir (make-temp-file "claude-session-sidebar-test" t))
+         (path (expand-file-name "sess.jsonl" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (insert (concat "{\"type\":\"user\",\"timestamp\":\"2026-07-21T10:00:00.000Z\","
+                            "\"cwd\":\"/home/hoooo/.emacs.d\",\"gitBranch\":\"main\","
+                            "\"message\":{\"role\":\"user\"}}\n")))
+          (let ((instance (vui-mount (vui-component 'claude-session-sidebar-widget-git-info :path path)
+                                      "*claude-session-sidebar-widget-test*")))
+            (unwind-protect
+                (with-current-buffer (vui-instance-buffer instance)
+                  (should (string-match-p "Branch: main" (buffer-string)))
+                  (should (string-match-p "\\.emacs\\.d" (buffer-string))))
+              (kill-buffer (vui-instance-buffer instance)))))
+      (delete-directory dir t))))
+
+(ert-deftest claude-session-sidebar-test-activity-widget-registered-by-default ()
+  (should (assq 'activity claude-session-sidebar--widgets))
+  (should (eq (plist-get (cdr (assq 'activity claude-session-sidebar--widgets)) :component)
+              'claude-session-sidebar-widget-activity)))
+
+(ert-deftest claude-session-sidebar-test-render-activity-no-events ()
+  (let* ((session (make-claude-session-log-session))
+         (rendered (with-temp-buffer
+                     (vui-render (claude-session-sidebar--render-activity session))
+                     (buffer-string))))
+    (should (string-match-p "No activity" rendered))))
+
+(ert-deftest claude-session-sidebar-test-render-activity-shows-type-model-and-age ()
+  "NOW is passed explicitly (rather than read from `current-time') so
+this test is deterministic instead of racing the clock."
+  (let* ((session (make-claude-session-log-session
+                   :events (list (list :timestamp "2026-07-21T10:00:00.000Z"
+                                       :type "user" :role "user" :model nil)
+                                 (list :timestamp "2026-07-21T10:00:05.000Z"
+                                       :type "assistant" :role "assistant"
+                                       :model "claude-sonnet-5"))))
+         (now (encode-time (iso8601-parse "2026-07-21T10:00:35.000Z")))
+         (rendered (with-temp-buffer
+                     (vui-render (claude-session-sidebar--render-activity session now))
+                     (buffer-string))))
+    ;; Must report the LAST event (assistant), not the first (user).
+    (should (string-match-p "assistant" rendered))
+    (should (string-match-p "claude-sonnet-5" rendered))
+    (should (string-match-p "30s ago" rendered))))
+
 (ert-deftest claude-session-sidebar-test-render-sidebar-without-window-is-noop ()
   "No live sidebar window means no error, no instance created --
 mirrors vulpea-ui-test-render-sidebar-without-window-is-noop."

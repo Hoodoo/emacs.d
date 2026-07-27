@@ -209,6 +209,216 @@ Returns one of:
 (claude-session-sidebar-register-widget
  'stats :component 'claude-session-sidebar-widget-stats :order 10)
 
+(defun claude-session-sidebar--task-status-marker (status)
+  "Return a checkbox-style marker string for a task's STATUS string."
+  (pcase status
+    ("completed" "[x]")
+    ("in_progress" "[~]")
+    (_ "[ ]")))
+
+(defun claude-session-sidebar--render-task-list (session)
+  "Render SESSION's latest task-list snapshot as a vnode.
+SESSION's `task-list' is the raw `task_reminder' attachment plist (or
+nil if the session hasn't emitted one yet): `:content' holds the task
+plists, each with `:subject' and `:status'."
+  (let ((items (plist-get (claude-session-log-session-task-list session) :content)))
+    (if (null items)
+        (vui-muted "No tasks.")
+      (apply #'vui-vstack
+             (mapcar (lambda (item)
+                       (vui-text (format "%s %s"
+                                         (claude-session-sidebar--task-status-marker
+                                          (plist-get item :status))
+                                         (plist-get item :subject))
+                         :face (when (equal (plist-get item :status) "in_progress") 'bold)))
+                     items)))))
+
+(vui-defcomponent claude-session-sidebar-widget-task-list (path)
+  "Task-list widget: latest todo snapshot for PATH."
+  :render
+  (let* ((last-ref (vui-use-ref nil))
+         (mtime (claude-session-sidebar--file-mtime path))
+         (result (vui-use-async (list path mtime)
+                   (lambda (resolve reject)
+                     (condition-case err
+                         (funcall resolve (claude-session-log-parse-file path))
+                       (error (funcall reject (error-message-string err)))))))
+         (status (plist-get result :status))
+         (decision (claude-session-sidebar--stats-display-data
+                    status path (plist-get result :data) last-ref))
+         (state (car decision))
+         (session (cdr decision)))
+    (pcase state
+      ('shown (claude-session-sidebar--render-task-list session))
+      ('error (vui-muted (format "Unavailable: %s" (plist-get result :error))))
+      (_ (vui-muted "Loading…")))))
+
+(claude-session-sidebar-register-widget
+ 'task-list :component 'claude-session-sidebar-widget-task-list :order 5)
+
+(defun claude-session-sidebar--render-files-touched (session)
+  "Render SESSION's `files-touched' list as a vnode.
+Paths are already deduped by `claude-session-log-session-files-touched';
+abbreviated under `$HOME' here so long absolute paths don't blow out
+the sidebar's width."
+  (let ((files (claude-session-log-session-files-touched session)))
+    (if (null files)
+        (vui-muted "No files touched.")
+      (apply #'vui-vstack
+             (mapcar (lambda (f) (vui-text (abbreviate-file-name f))) files)))))
+
+(vui-defcomponent claude-session-sidebar-widget-files-touched (path)
+  "Files-touched widget: files read/edited this session, for PATH."
+  :render
+  (let* ((last-ref (vui-use-ref nil))
+         (mtime (claude-session-sidebar--file-mtime path))
+         (result (vui-use-async (list path mtime)
+                   (lambda (resolve reject)
+                     (condition-case err
+                         (funcall resolve (claude-session-log-parse-file path))
+                       (error (funcall reject (error-message-string err)))))))
+         (status (plist-get result :status))
+         (decision (claude-session-sidebar--stats-display-data
+                    status path (plist-get result :data) last-ref))
+         (state (car decision))
+         (session (cdr decision)))
+    (pcase state
+      ('shown (claude-session-sidebar--render-files-touched session))
+      ('error (vui-muted (format "Unavailable: %s" (plist-get result :error))))
+      (_ (vui-muted "Loading…")))))
+
+(claude-session-sidebar-register-widget
+ 'files-touched :component 'claude-session-sidebar-widget-files-touched :order 6)
+
+(defun claude-session-sidebar--render-subagents (session)
+  "Render SESSION's subagents as a vnode.
+Each line shows the subagent's type, description, and own total cost
+-- `claude-session-log-parse-file' has already folded that cost via
+`claude-session-log--apply-costs' by the time SESSION reaches here."
+  (let ((subagents (claude-session-log-session-subagents session)))
+    (if (null subagents)
+        (vui-muted "No subagents.")
+      (apply #'vui-vstack
+             (mapcar
+              (lambda (sub)
+                (vui-text (format "%s: %s ($%.4f)"
+                                  (or (claude-session-log-subagent-agent-type sub) "agent")
+                                  (or (claude-session-log-subagent-description sub) "")
+                                  (or (claude-session-log-subagent-total-cost sub) 0.0))))
+              subagents)))))
+
+(vui-defcomponent claude-session-sidebar-widget-subagents (path)
+  "Subagents widget: subagent runs spawned this session, for PATH."
+  :render
+  (let* ((last-ref (vui-use-ref nil))
+         (mtime (claude-session-sidebar--file-mtime path))
+         (result (vui-use-async (list path mtime)
+                   (lambda (resolve reject)
+                     (condition-case err
+                         (funcall resolve (claude-session-log-parse-file path))
+                       (error (funcall reject (error-message-string err)))))))
+         (status (plist-get result :status))
+         (decision (claude-session-sidebar--stats-display-data
+                    status path (plist-get result :data) last-ref))
+         (state (car decision))
+         (session (cdr decision)))
+    (pcase state
+      ('shown (claude-session-sidebar--render-subagents session))
+      ('error (vui-muted (format "Unavailable: %s" (plist-get result :error))))
+      (_ (vui-muted "Loading…")))))
+
+(claude-session-sidebar-register-widget
+ 'subagents :component 'claude-session-sidebar-widget-subagents :order 7)
+
+(defun claude-session-sidebar--render-git-info (session)
+  "Render SESSION's current branch/cwd as a vnode, flagging either if
+it changed mid-session.
+
+`cwds'/`branches' are deduped, first-seen-order lists (see
+`claude-session-log--parse-lines'): the last element is the most
+recently *newly seen* value, treated here as \"current\"; more than one
+element means it changed at least once."
+  (let ((cwds (claude-session-log-session-cwds session))
+        (branches (claude-session-log-session-branches session)))
+    (if (and (null cwds) (null branches))
+        (vui-muted "No git info.")
+      (vui-vstack
+       (vui-text (format "Branch: %s" (or (car (last branches)) "unknown")))
+       (when (> (length branches) 1)
+         (vui-warning (format "Branch changed %d times" (length branches))))
+       (vui-text (format "Cwd: %s" (abbreviate-file-name (or (car (last cwds)) "unknown"))))
+       (when (> (length cwds) 1)
+         (vui-warning (format "Cwd changed %d times" (length cwds))))))))
+
+(vui-defcomponent claude-session-sidebar-widget-git-info (path)
+  "Git branch/cwd widget: current branch and cwd for PATH, flagging
+either if it changed mid-session."
+  :render
+  (let* ((last-ref (vui-use-ref nil))
+         (mtime (claude-session-sidebar--file-mtime path))
+         (result (vui-use-async (list path mtime)
+                   (lambda (resolve reject)
+                     (condition-case err
+                         (funcall resolve (claude-session-log-parse-file path))
+                       (error (funcall reject (error-message-string err)))))))
+         (status (plist-get result :status))
+         (decision (claude-session-sidebar--stats-display-data
+                    status path (plist-get result :data) last-ref))
+         (state (car decision))
+         (session (cdr decision)))
+    (pcase state
+      ('shown (claude-session-sidebar--render-git-info session))
+      ('error (vui-muted (format "Unavailable: %s" (plist-get result :error))))
+      (_ (vui-muted "Loading…")))))
+
+(claude-session-sidebar-register-widget
+ 'git-info :component 'claude-session-sidebar-widget-git-info :order 8)
+
+(defun claude-session-sidebar--render-activity (session &optional now)
+  "Render SESSION's most recent event as a vnode: its type/model and how
+long ago it happened, for an at-a-glance \"is it stuck\" signal.
+
+`events' is chronological (see `claude-session-log--parse-lines'), so
+the last element is the most recent. NOW defaults to `current-time';
+callers pass it explicitly to keep tests deterministic."
+  (let* ((events (claude-session-log-session-events session))
+         (last-event (car (last events))))
+    (if (null last-event)
+        (vui-muted "No activity.")
+      (let* ((timestamp (plist-get last-event :timestamp))
+             (parsed (claude-session-log--parse-timestamp timestamp))
+             (seconds-ago (when parsed
+                            (float-time (time-subtract (or now (current-time)) parsed))))
+             (model (plist-get last-event :model)))
+        (vui-text (format "Last activity: %s%s — %s"
+                          (plist-get last-event :type)
+                          (if model (format " (%s)" model) "")
+                          (if seconds-ago (format "%ds ago" (round seconds-ago))
+                            "unknown time")))))))
+
+(vui-defcomponent claude-session-sidebar-widget-activity (path)
+  "Live activity widget: most recent event and its age, for PATH."
+  :render
+  (let* ((last-ref (vui-use-ref nil))
+         (mtime (claude-session-sidebar--file-mtime path))
+         (result (vui-use-async (list path mtime)
+                   (lambda (resolve reject)
+                     (condition-case err
+                         (funcall resolve (claude-session-log-parse-file path))
+                       (error (funcall reject (error-message-string err)))))))
+         (status (plist-get result :status))
+         (decision (claude-session-sidebar--stats-display-data
+                    status path (plist-get result :data) last-ref))
+         (state (car decision))
+         (session (cdr decision)))
+    (pcase state
+      ('shown (claude-session-sidebar--render-activity session))
+      ('error (vui-muted (format "Unavailable: %s" (plist-get result :error))))
+      (_ (vui-muted "Loading…")))))
+
+(claude-session-sidebar-register-widget
+ 'activity :component 'claude-session-sidebar-widget-activity :order 9)
+
 (vui-defcomponent claude-session-sidebar-root (path)
   "Root sidebar component: no-session message, or every registered
 widget in `:order', each passed PATH."
