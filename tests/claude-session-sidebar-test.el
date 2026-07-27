@@ -315,5 +315,71 @@ mirrors vulpea-ui-test-render-sidebar-without-window-is-noop."
         (when (window-live-p sidebar-win) (ignore-errors (delete-window sidebar-win)))
         (mapc #'kill-buffer (list main-buf sidebar-buf))))))
 
+(ert-deftest claude-session-sidebar-test-on-buffer-change-hides-when-no-session ()
+  (save-window-excursion
+    (let* ((claude-session-sidebar--instances (make-hash-table :test 'eq))
+           (claude-session-sidebar--auto-hidden (make-hash-table :test 'eq))
+           (main-buf (generate-new-buffer "plain"))
+           (sidebar-buf (get-buffer-create (claude-session-sidebar--sidebar-buffer-name)))
+           (sidebar-win (display-buffer-in-side-window
+                         sidebar-buf '((side . right) (slot . 0)))))
+      (unwind-protect
+          (progn
+            (with-current-buffer sidebar-buf
+              (setq claude-session-sidebar--current-path "/some/prior/session.jsonl"))
+            (switch-to-buffer main-buf)
+            (claude-session-sidebar--on-buffer-change)
+            (should-not (window-live-p sidebar-win))
+            (should (gethash (selected-frame) claude-session-sidebar--auto-hidden)))
+        (mapc #'kill-buffer (list main-buf sidebar-buf))))))
+
+(ert-deftest claude-session-sidebar-test-on-buffer-change-reshows-when-session-found ()
+  "Resolution itself is already covered by Task 1's tests -- this test
+stubs `--resolve-session-path' directly so it exercises only
+`--on-buffer-change''s own show/re-render decision."
+  (save-window-excursion
+    (let* ((claude-session-sidebar--instances (make-hash-table :test 'eq))
+           (claude-session-sidebar--auto-hidden (make-hash-table :test 'eq))
+           (main-buf (generate-new-buffer "main"))
+           (sidebar-buf (get-buffer-create (claude-session-sidebar--sidebar-buffer-name))))
+      (unwind-protect
+          (progn
+            (puthash (selected-frame) t claude-session-sidebar--auto-hidden)
+            (switch-to-buffer main-buf)
+            (cl-letf (((symbol-function 'claude-session-sidebar--resolve-session-path)
+                       (lambda (&optional _frame) "/some/session.jsonl")))
+              (claude-session-sidebar--on-buffer-change)
+              (should (claude-session-sidebar--sidebar-visible-p))
+              (should-not (gethash (selected-frame) claude-session-sidebar--auto-hidden))))
+        (mapc #'kill-buffer (list main-buf sidebar-buf))
+        (ignore-errors (delete-window (claude-session-sidebar--get-sidebar-window)))))))
+
+(ert-deftest claude-session-sidebar-test-start-stop-idle-timer ()
+  (unwind-protect
+      (progn
+        (claude-session-sidebar--start-idle-timer)
+        (should (timerp claude-session-sidebar--idle-timer))
+        (claude-session-sidebar--stop-idle-timer)
+        (should (null claude-session-sidebar--idle-timer)))
+    (claude-session-sidebar--stop-idle-timer)))
+
+(ert-deftest claude-session-sidebar-test-open-close-toggle ()
+  :tags '(:integration)
+  (skip-unless (ignore-errors (make-frame '((visibility . nil)))))
+  (let ((frame (make-frame '((visibility . nil)))))
+    (unwind-protect
+        (with-selected-frame frame
+          (should-not (claude-session-sidebar--sidebar-visible-p))
+          (claude-session-sidebar-open)
+          (should (claude-session-sidebar--sidebar-visible-p))
+          (claude-session-sidebar-close)
+          (should-not (claude-session-sidebar--sidebar-visible-p))
+          (claude-session-sidebar-toggle)
+          (should (claude-session-sidebar--sidebar-visible-p))
+          (claude-session-sidebar-toggle)
+          (should-not (claude-session-sidebar--sidebar-visible-p)))
+      (claude-session-sidebar--teardown-hooks)
+      (delete-frame frame))))
+
 (provide 'claude-session-sidebar-test)
 ;;; claude-session-sidebar-test.el ends here

@@ -16,9 +16,6 @@
 (require 'vui)
 (require 'vui-components)
 
-(declare-function claude-session-sidebar-close "claude-session-sidebar")
-(declare-function claude-session-sidebar-refresh "claude-session-sidebar")
-
 ;; Forward declarations so this file loads standalone (e.g. under test,
 ;; without the real `agent-shell' package present), mirroring the same
 ;; pattern already used by `hoodoo-session-context.el' in this repo.
@@ -257,6 +254,128 @@ restores the originally-selected window."
           (goto-char (point-min)))
         (when (window-live-p original-window)
           (select-window original-window t))))))
+
+(defcustom claude-session-sidebar-auto-hide t
+  "When non-nil, automatically hide the sidebar when there's no session at point."
+  :type 'boolean
+  :group 'claude-session-sidebar)
+
+(defcustom claude-session-sidebar-auto-refresh-delay 1.5
+  "Idle seconds before auto-refreshing the sidebar."
+  :type 'number
+  :group 'claude-session-sidebar)
+
+(defvar claude-session-sidebar--auto-hidden (make-hash-table :test 'eq)
+  "Hash table tracking frames where the sidebar was auto-hidden.")
+
+(defun claude-session-sidebar--on-buffer-change (&optional _frame)
+  "Auto-show/hide the sidebar and re-render on session change.
+Ported from `vulpea-ui--on-buffer-change', with `vulpea-ui''s \"note\"
+replaced by \"resolved session path\", compared with `equal' rather
+than a note-id lookup."
+  (unless (or (minibufferp) claude-session-sidebar--rendering)
+    (let* ((frame (selected-frame))
+           (sidebar-buf (claude-session-sidebar--get-sidebar-buffer frame))
+           (auto-hidden-p (gethash frame claude-session-sidebar--auto-hidden)))
+      (when sidebar-buf
+        (let* ((path (claude-session-sidebar--resolve-session-path frame))
+               (had-path (buffer-local-value 'claude-session-sidebar--current-path sidebar-buf))
+               (visible (claude-session-sidebar--sidebar-visible-p frame))
+               (same-path (and path had-path (equal path had-path))))
+          (cond
+           ((and (null path) had-path claude-session-sidebar-auto-hide visible)
+            (claude-session-sidebar--hide-sidebar-window frame)
+            (puthash frame t claude-session-sidebar--auto-hidden))
+           ((and path auto-hidden-p)
+            (remhash frame claude-session-sidebar--auto-hidden)
+            (claude-session-sidebar--show-sidebar-window frame)
+            (unless same-path (claude-session-sidebar--render-sidebar path frame)))
+           ((and path visible (not same-path))
+            (claude-session-sidebar--render-sidebar path frame))))))))
+
+(defvar claude-session-sidebar--idle-timer nil
+  "Timer for auto-refreshing the sidebar on idle.")
+
+(defun claude-session-sidebar--on-idle ()
+  "Soft-refresh the visible sidebar on idle: re-render without
+invalidating widget memos (`vui-use-async' handles its own
+mtime-keyed staleness check internally)."
+  (when (claude-session-sidebar--sidebar-visible-p)
+    (claude-session-sidebar--render-sidebar
+     (claude-session-sidebar--resolve-session-path))))
+
+(defun claude-session-sidebar--start-idle-timer ()
+  "Start the idle timer for auto-refresh."
+  (claude-session-sidebar--stop-idle-timer)
+  (setq claude-session-sidebar--idle-timer
+        (run-with-idle-timer claude-session-sidebar-auto-refresh-delay t
+                             #'claude-session-sidebar--on-idle)))
+
+(defun claude-session-sidebar--stop-idle-timer ()
+  "Stop the idle timer for auto-refresh."
+  (when claude-session-sidebar--idle-timer
+    (cancel-timer claude-session-sidebar--idle-timer)
+    (setq claude-session-sidebar--idle-timer nil)))
+
+(defun claude-session-sidebar--setup-hooks ()
+  "Set up hooks and the idle timer for sidebar auto-show/hide/refresh."
+  (add-hook 'window-buffer-change-functions #'claude-session-sidebar--on-buffer-change)
+  (add-hook 'window-selection-change-functions #'claude-session-sidebar--on-buffer-change)
+  (claude-session-sidebar--start-idle-timer))
+
+(defun claude-session-sidebar--teardown-hooks ()
+  "Remove hooks and stop the idle timer."
+  (remove-hook 'window-buffer-change-functions #'claude-session-sidebar--on-buffer-change)
+  (remove-hook 'window-selection-change-functions #'claude-session-sidebar--on-buffer-change)
+  (claude-session-sidebar--stop-idle-timer))
+
+;;;###autoload
+(defun claude-session-sidebar-open ()
+  "Open or show the claude-session-sidebar in the current frame."
+  (interactive)
+  (let* ((frame (selected-frame))
+         (buf-name (claude-session-sidebar--sidebar-buffer-name frame))
+         (buf (get-buffer-create buf-name)))
+    (with-current-buffer buf
+      (unless (derived-mode-p 'claude-session-sidebar-mode)
+        (claude-session-sidebar-mode)))
+    (unless (claude-session-sidebar--sidebar-visible-p frame)
+      (claude-session-sidebar--create-sidebar-window buf))
+    (claude-session-sidebar--setup-hooks)
+    (claude-session-sidebar--render-sidebar
+     (claude-session-sidebar--resolve-session-path frame) frame)))
+
+;;;###autoload
+(defun claude-session-sidebar-close ()
+  "Close the claude-session-sidebar in the current frame."
+  (interactive)
+  (let* ((frame (selected-frame))
+         (buf (claude-session-sidebar--get-sidebar-buffer frame)))
+    (claude-session-sidebar--hide-sidebar-window frame)
+    (when buf (kill-buffer buf))
+    (remhash frame claude-session-sidebar--instances)
+    (remhash frame claude-session-sidebar--auto-hidden)
+    (when (zerop (hash-table-count claude-session-sidebar--instances))
+      (claude-session-sidebar--teardown-hooks))))
+
+;;;###autoload
+(defun claude-session-sidebar-toggle ()
+  "Toggle the claude-session-sidebar visibility in the current frame."
+  (interactive)
+  (if (claude-session-sidebar--sidebar-visible-p)
+      (claude-session-sidebar-close)
+    (claude-session-sidebar-open)))
+
+;;;###autoload
+(defun claude-session-sidebar-refresh ()
+  "Force refresh the sidebar, invalidating widget memos."
+  (interactive)
+  (let* ((frame (selected-frame))
+         (path (claude-session-sidebar--resolve-session-path frame))
+         (instance (gethash frame claude-session-sidebar--instances)))
+    (when (and instance (vui-instance-buffer instance)
+               (buffer-live-p (vui-instance-buffer instance)))
+      (vui-update instance (list :path path)))))
 
 (defun claude-session-sidebar--get-main-window (&optional frame)
   "Get the most recently used main window in FRAME.
