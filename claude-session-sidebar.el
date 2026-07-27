@@ -380,24 +380,26 @@ mtime-keyed staleness check internally)."
                (buffer-live-p (vui-instance-buffer instance)))
       (vui-update instance (list :path path)))))
 
-(defun claude-session-sidebar--get-main-window (&optional frame)
-  "Get the most recently used main window in FRAME.
-A main window is a live, non-minibuffer window that is neither this
-sidebar nor any other side window. Ported from
-`vulpea-ui--get-main-window'."
-  (let* ((frame (or frame (selected-frame)))
-         (sidebar-win (claude-session-sidebar--get-sidebar-window frame))
-         (selected (frame-selected-window frame))
-         (mainp (lambda (win)
-                  (and (not (eq win sidebar-win))
-                       (not (window-parameter win 'window-side))
-                       (not (window-minibuffer-p win))))))
-    (if (and selected (funcall mainp selected))
-        selected
-      (or (car (sort (seq-filter mainp (window-list frame nil))
-                     (lambda (a b)
-                       (> (window-use-time a) (window-use-time b)))))
-          (frame-first-window frame)))))
+(defun claude-session-sidebar--find-agent-shell-buffer (&optional frame)
+  "Return the sole agent-shell-mode buffer displayed in a window of
+FRAME, or nil unless there is exactly one.
+
+Deliberately does NOT exclude side windows: this repo's own config
+(`auto-side-windows-bottom-buffer-modes' in init.el) routes every
+`agent-shell-mode' buffer into a side window, so excluding side
+windows -- the way a \"main window\" search would -- means an
+agent-shell buffer could never be found at all. Mirrors the same
+disambiguation rule `hoodoo-session-context.el' uses for its own,
+unrelated purpose (tab-scoped session identity); reimplemented
+independently here, per this package's no-dependency design."
+  (let ((candidates
+         (seq-uniq
+          (seq-filter (lambda (buf)
+                        (eq (buffer-local-value 'major-mode buf) 'agent-shell-mode))
+                      (mapcar #'window-buffer (window-list frame 'no-mini)))
+          #'eq)))
+    (when (= (length candidates) 1)
+      (car candidates))))
 
 (defun claude-session-sidebar--session-info-from-buffer (buffer)
   "Return (SESSION-ID . CWD) for BUFFER, or nil.
@@ -424,11 +426,11 @@ collapsing of resulting repeated dashes)."
 
 (defun claude-session-sidebar--resolve-session-path (&optional frame)
   "Return the JSONL path for the session at point in FRAME, or nil.
-Nil when the main window's buffer isn't an agent-shell session, or when
-the constructed path doesn't exist on disk yet (session not flushed,
-or a non-Claude-Code agent-shell backend)."
-  (when-let* ((main-win (claude-session-sidebar--get-main-window frame))
-              (buf (window-buffer main-win))
+Nil when there isn't exactly one agent-shell-mode buffer visible in
+FRAME, when that buffer isn't a Claude Code session, or when the
+constructed path doesn't exist on disk yet (session not flushed, or a
+non-Claude-Code agent-shell backend)."
+  (when-let* ((buf (claude-session-sidebar--find-agent-shell-buffer frame))
               (info (claude-session-sidebar--session-info-from-buffer buf))
               (path (claude-session-sidebar--session-jsonl-path
                      (car info)

@@ -3,29 +3,61 @@
 
 (require 'ert)
 
-(ert-deftest claude-session-sidebar-test-get-main-window-prefers-selected ()
-  (let ((buf (generate-new-buffer "main")))
+(ert-deftest claude-session-sidebar-test-find-agent-shell-buffer-in-side-window ()
+  "Regression test: this repo's own config (auto-side-windows-bottom-
+buffer-modes in init.el) routes agent-shell-mode buffers into a side
+window -- resolution must not exclude side windows, or an agent-shell
+buffer can never be found at all. Discovered via live testing in a
+real Emacs session, not caught by batch tests until this regression
+test was added."
+  (let ((buf (generate-new-buffer "agent")))
     (unwind-protect
         (progn
           (delete-other-windows)
-          (switch-to-buffer buf)
-          (should (eq (claude-session-sidebar--get-main-window) (selected-window))))
+          (with-current-buffer buf (setq major-mode 'agent-shell-mode))
+          (let ((side-win (display-buffer-in-side-window
+                            buf '((side . bottom) (slot . 0)))))
+            (should (eq (claude-session-sidebar--find-agent-shell-buffer) buf))
+            (ignore side-win)))
       (kill-buffer buf)
       (delete-other-windows))))
 
-(ert-deftest claude-session-sidebar-test-get-main-window-skips-side-windows ()
-  (let ((buf (generate-new-buffer "main"))
-        (side-buf (generate-new-buffer "side")))
+(ert-deftest claude-session-sidebar-test-find-agent-shell-buffer-none ()
+  (let ((buf (generate-new-buffer "plain")))
     (unwind-protect
         (progn
           (delete-other-windows)
           (switch-to-buffer buf)
-          (let ((main-win (selected-window))
-                (side-win (display-buffer-in-side-window
-                           side-buf '((side . right) (slot . 0)))))
-            (select-window side-win)
-            (should (eq (claude-session-sidebar--get-main-window) main-win))))
-      (mapc #'kill-buffer (list buf side-buf))
+          (should (null (claude-session-sidebar--find-agent-shell-buffer))))
+      (kill-buffer buf)
+      (delete-other-windows))))
+
+(ert-deftest claude-session-sidebar-test-find-agent-shell-buffer-ambiguous ()
+  (let ((buf-1 (generate-new-buffer "agent-1"))
+        (buf-2 (generate-new-buffer "agent-2")))
+    (unwind-protect
+        (progn
+          (delete-other-windows)
+          (with-current-buffer buf-1 (setq major-mode 'agent-shell-mode))
+          (with-current-buffer buf-2 (setq major-mode 'agent-shell-mode))
+          (switch-to-buffer buf-1)
+          (set-window-buffer (split-window) buf-2)
+          (should (null (claude-session-sidebar--find-agent-shell-buffer))))
+      (mapc #'kill-buffer (list buf-1 buf-2))
+      (delete-other-windows))))
+
+(ert-deftest claude-session-sidebar-test-find-agent-shell-buffer-same-buffer-two-windows ()
+  "The same buffer shown in two windows (e.g. after `C-x 2') is still
+exactly one candidate, not an ambiguous pair."
+  (let ((buf (generate-new-buffer "agent")))
+    (unwind-protect
+        (progn
+          (delete-other-windows)
+          (with-current-buffer buf (setq major-mode 'agent-shell-mode))
+          (switch-to-buffer buf)
+          (set-window-buffer (split-window) buf)
+          (should (eq (claude-session-sidebar--find-agent-shell-buffer) buf)))
+      (kill-buffer buf)
       (delete-other-windows))))
 
 (ert-deftest claude-session-sidebar-test-session-info-from-buffer-non-agent-shell ()
@@ -120,6 +152,40 @@ must be treated as \"no session info\", never let escape."
                       ((symbol-function 'agent-shell-cwd)
                        (lambda () default-directory)))
               (should (equal (claude-session-sidebar--resolve-session-path) jsonl-path)))))
+      (kill-buffer buf)
+      (delete-other-windows)
+      (when (file-exists-p jsonl-path) (delete-file jsonl-path))
+      (when (file-directory-p claude-dir) (delete-directory claude-dir))
+      (when (file-directory-p project-dir) (delete-directory project-dir t)))))
+
+(ert-deftest claude-session-sidebar-test-resolve-session-path-agent-shell-in-side-window ()
+  "End-to-end regression test for the reported bug: an agent-shell
+buffer displayed in a side window (as this repo's own init.el config
+does for every agent-shell-mode buffer) must still resolve, not be
+silently treated as \"no session\"."
+  (let* ((buf (generate-new-buffer "agent"))
+         (project-dir (make-temp-file "claude-session-sidebar-test" t))
+         (claude-dir (expand-file-name
+                      (claude-session-sidebar--encode-cwd project-dir)
+                      "~/.claude/projects/"))
+         (jsonl-path (expand-file-name "session-xyz.jsonl" claude-dir))
+         side-win)
+    (unwind-protect
+        (progn
+          (make-directory claude-dir t)
+          (with-temp-file jsonl-path (insert "{\"type\":\"user\"}\n"))
+          (with-current-buffer buf
+            (setq major-mode 'agent-shell-mode)
+            (setq default-directory project-dir))
+          (delete-other-windows)
+          (setq side-win (display-buffer-in-side-window
+                          buf '((side . bottom) (slot . 0))))
+          (cl-letf (((symbol-function 'agent-shell--state)
+                     (lambda () (list :session (list :id "session-xyz"))))
+                    ((symbol-function 'agent-shell-cwd)
+                     (lambda () default-directory)))
+            (should (equal (claude-session-sidebar--resolve-session-path) jsonl-path))))
+      (when (window-live-p side-win) (ignore-errors (delete-window side-win)))
       (kill-buffer buf)
       (delete-other-windows)
       (when (file-exists-p jsonl-path) (delete-file jsonl-path))
