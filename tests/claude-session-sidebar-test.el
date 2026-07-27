@@ -99,6 +99,17 @@ must be treated as \"no session info\", never let escape."
   (should (equal (claude-session-sidebar--encode-cwd "/home/hoooo/AISlop/codex-adventure-game-prolog")
                  "-home-hoooo-AISlop-codex-adventure-game-prolog")))
 
+(ert-deftest claude-session-sidebar-test-encode-cwd-trailing-slash ()
+  "Regression test: `agent-shell-cwd' returns directories in Emacs's
+`default-directory' convention (always slash-terminated) -- e.g.
+\"/home/hoooo/.emacs.d/\", not \"/home/hoooo/.emacs.d\". Encoding must
+strip that trailing slash first, or it turns into a spurious trailing
+dash that never matches the CLI's own directory name (discovered via
+live `emacsclient' introspection: `claude-session-sidebar-toggle' could
+never resolve a session in this very repo)."
+  (should (equal (claude-session-sidebar--encode-cwd "/home/hoooo/.emacs.d/")
+                 "-home-hoooo--emacs-d")))
+
 (ert-deftest claude-session-sidebar-test-session-jsonl-path ()
   (should (equal (claude-session-sidebar--session-jsonl-path "abc-123" "-home-hoooo--emacs-d")
                  (expand-file-name "abc-123.jsonl"

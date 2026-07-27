@@ -416,8 +416,16 @@ that signal is swallowed here, never allowed to escape)."
 (defun claude-session-sidebar--encode-cwd (cwd)
   "Encode CWD the way Claude Code's CLI names its project directories:
 every `/' and `.' in the expanded path becomes `-', independently (no
-collapsing of resulting repeated dashes)."
-  (replace-regexp-in-string "[/.]" "-" (expand-file-name cwd)))
+collapsing of resulting repeated dashes).
+
+CWD is stripped of any trailing slash before encoding: `agent-shell-cwd'
+returns directories in Emacs's `default-directory' convention (always
+slash-terminated), but the CLI encodes the path without one -- left
+un-stripped, the trailing slash became a spurious trailing dash,
+producing a directory name that never matched the CLI's own, so a
+session's JSONL path could never be found."
+  (replace-regexp-in-string
+   "[/.]" "-" (directory-file-name (expand-file-name cwd))))
 
 (defun claude-session-sidebar--session-jsonl-path (session-id encoded-cwd)
   "Return the JSONL path for SESSION-ID under Claude's ENCODED-CWD dir."
