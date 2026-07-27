@@ -12,6 +12,11 @@
 
 (setq package-enable-at-startup nil)
 
+;; Home for our own homemade packages (hoodoo-session-context.el,
+;; claude-session-log.el, claude-session-sidebar.el, ...) so they're
+;; plain `require'-able instead of each needing an explicit file path.
+(add-to-list 'load-path user-emacs-directory)
+
 ;; Bootstrap straight.el - for certain agent related packages
 ;; which get developed too fast to land on (m)elpa
 ;; NB: straight seems to conflict with package
@@ -185,14 +190,18 @@
    ("C-c a e" . hoodoo/session-eat)
    ("C-c a m" . hoodoo/session-magit-status)
    ("C-c a j" . hoodoo/session-dired)
-   ("C-c a a" . hoodoo/session-attach-buffer))
+   ("C-c a a" . hoodoo/session-attach-buffer)
+   ("C-c a s" . claude-session-sidebar-toggle))
   :config
   ;; Ties eat/magit/dired buffers to the agent-shell session (buffer)
   ;; they support, and gives each session its own tab-bar tab.
   ;; See hoodoo-session-context.el and
   ;; docs/superpowers/specs/2026-07-21-agent-shell-session-context-design.md
   (require 'hoodoo-session-context
-           (expand-file-name "hoodoo-session-context.el" user-emacs-directory)))
+           (expand-file-name "hoodoo-session-context.el" user-emacs-directory))
+  ;; Sidebar showing claude-session-log stats for the session at point.
+  ;; See docs/superpowers/specs/2026-07-24-claude-session-sidebar-design.md
+  (require 'claude-session-sidebar))
 
 ;; Store the transcripts centrally
 (use-package agent-shell-org-transcript
