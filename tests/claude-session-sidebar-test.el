@@ -93,11 +93,21 @@ must be treated as \"no session info\", never let escape."
       (kill-buffer buf))))
 
 (ert-deftest claude-session-sidebar-test-encode-cwd ()
-  ;; Verified against two real directories on this machine.
+  ;; Verified against real directories on this machine.
   (should (equal (claude-session-sidebar--encode-cwd "/home/hoooo/.emacs.d")
                  "-home-hoooo--emacs-d"))
   (should (equal (claude-session-sidebar--encode-cwd "/home/hoooo/AISlop/codex-adventure-game-prolog")
                  "-home-hoooo-AISlop-codex-adventure-game-prolog")))
+
+(ert-deftest claude-session-sidebar-test-encode-cwd-underscore ()
+  "Regression test: the CLI's project-directory naming replaces `_' with
+`-' too, not just `/' and `.' -- discovered via a real second session
+(oster_gen1, running in another tab of this same Emacs daemon) whose
+on-disk project dir is `-home-hoooo-AISlop-codex-oster-gen1' even
+though its actual `cwd' (verified in its own JSONL log) is
+\"/home/hoooo/AISlop/codex/oster_gen1\", underscore and all."
+  (should (equal (claude-session-sidebar--encode-cwd "/home/hoooo/AISlop/codex/oster_gen1")
+                 "-home-hoooo-AISlop-codex-oster-gen1")))
 
 (ert-deftest claude-session-sidebar-test-encode-cwd-trailing-slash ()
   "Regression test: `agent-shell-cwd' returns directories in Emacs's
