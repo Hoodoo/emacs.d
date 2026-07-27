@@ -206,6 +206,9 @@ Returns one of:
       ('error (vui-muted (format "Unavailable: %s" (plist-get result :error))))
       (_ (vui-muted "Loading…")))))
 
+(claude-session-sidebar-register-widget
+ 'stats :component 'claude-session-sidebar-widget-stats :order 10)
+
 (vui-defcomponent claude-session-sidebar-root (path)
   "Root sidebar component: no-session message, or every registered
 widget in `:order', each passed PATH."

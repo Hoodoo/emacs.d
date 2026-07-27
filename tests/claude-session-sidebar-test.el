@@ -291,6 +291,14 @@ regression this pattern already guards against in vulpea-ui (vulpea-journal#21).
               (kill-buffer (vui-instance-buffer instance)))))
       (delete-directory dir t))))
 
+(ert-deftest claude-session-sidebar-test-stats-widget-registered-by-default ()
+  "Regression test for the whole-branch-review finding: the stats
+widget must be registered at load time, not just inside tests that
+register it manually via a `let'-bound `claude-session-sidebar--widgets'."
+  (should (assq 'stats claude-session-sidebar--widgets))
+  (should (eq (plist-get (cdr (assq 'stats claude-session-sidebar--widgets)) :component)
+              'claude-session-sidebar-widget-stats)))
+
 (ert-deftest claude-session-sidebar-test-render-sidebar-without-window-is-noop ()
   "No live sidebar window means no error, no instance created --
 mirrors vulpea-ui-test-render-sidebar-without-window-is-noop."
