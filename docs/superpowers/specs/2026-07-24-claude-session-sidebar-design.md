@@ -45,16 +45,26 @@ current while you work.
 Mirrors `vulpea-ui`'s "note from buffer" pattern, reimplemented locally
 (no dependency on `vulpea-ui` or `hoodoo-session-context`):
 
-1. **Find the main window.** Port of `vulpea-ui--get-main-window`: prefer
-   the selected window if it's not the minibuffer and not a side window
-   (`window-parameter win 'window-side'` is nil); otherwise fall back to
-   the live, non-side, non-minibuffer window with the highest
-   `window-use-time`. This generically excludes *any* side window, not
-   just this package's own sidebar — so it correctly skips
-   `hoodoo-session-context`'s eat/magit/dired side windows too, without
-   needing to know about them.
-2. **Check its buffer's major mode.** If the main window's buffer is not
-   `agent-shell-mode`, there is no session at point.
+1. **Find the sole visible agent-shell buffer.** *(Revised after initial
+   implementation — see below.)* Scan every window in the frame,
+   including side windows (`(window-list frame 'no-mini)`, no
+   `window-parameter`/`window-side` filtering), for buffers whose
+   `major-mode` is `agent-shell-mode`, dedupe, and take the result if
+   there is exactly one; more than one is ambiguous (no session), same
+   as none. This mirrors `hoodoo-session-context.el`'s own
+   `hoodoo/session--current-session-buffer`, reimplemented
+   independently here (still no dependency on `hoodoo-session-context`
+   itself). The initial implementation instead ported
+   `vulpea-ui--get-main-window` (excluding all side windows, on the
+   assumption that the "content" buffer is never itself a side
+   window) — that assumption is false in this repo, whose own
+   `init.el` config (`auto-side-windows-bottom-buffer-modes`)
+   deliberately routes every `agent-shell-mode` buffer into a side
+   window, so the original approach could never find a session at
+   all. Discovered via live testing, fixed by replacing the main-window
+   search with the algorithm described here.
+2. **Confirm exactly one candidate was found.** If none or more than one
+   agent-shell-mode buffer is visible, there is no session at point.
 3. **Read session id and cwd from agent-shell's own buffer-local state**
    (confirmed present, no need to add tracking):
    - session-id: `(map-nested-elt (agent-shell--state) '(:session :id))`
